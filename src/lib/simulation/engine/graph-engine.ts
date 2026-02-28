@@ -191,8 +191,40 @@ export async function updateNodeStates(
 }
 
 export async function saveStateSnapshots(
-  _projectId: string, _tickId: string, _dayNumber: number, _tickIndex: number
-): Promise<void> {}
+  projectId: string, tickId: string, _dayNumber: number, _tickIndex: number
+): Promise<void> {
+  const { nodes, edges } = await getProjectGraph(projectId)
+  await prisma.tick.update({
+    where: { id: tickId },
+    data: {
+      graphSnapshot: { nodes, edges } as unknown as Prisma.InputJsonValue,
+    },
+  })
+}
+
+/**
+ * Restores graph state from a tick's snapshot. Used for rerun branching.
+ */
+export async function restoreGraphFromSnapshot(
+  projectId: string, tickId: string
+): Promise<GraphData> {
+  const tick = await prisma.tick.findUnique({
+    where: { id: tickId },
+    select: { graphSnapshot: true },
+  })
+  if (!tick?.graphSnapshot) {
+    throw new Error('No graph snapshot found for tick')
+  }
+  const snapshot = tick.graphSnapshot as unknown as GraphData
+  await prisma.project.update({
+    where: { id: projectId },
+    data: {
+      graphNodes: snapshot.nodes as unknown as Prisma.InputJsonValue,
+      graphEdges: snapshot.edges as unknown as Prisma.InputJsonValue,
+    },
+  })
+  return snapshot
+}
 
 export async function propagateInfluence(projectId: string): Promise<void> {
   const { nodes, edges } = await getProjectGraph(projectId)

@@ -1,6 +1,7 @@
 'use client'
 
-import { useSimulation, useSimulationDispatch } from './SimulationContext'
+import { useState } from 'react'
+import { useSimulation, useSimulationDispatch, type SimulationReportData } from './SimulationContext'
 
 const GRADE_COLORS: Record<string, string> = {
   A: 'text-green-400 border-green-500/40 bg-green-950/30',
@@ -30,11 +31,22 @@ const IMPACT_ICONS: Record<string, string> = {
   neutral: '~',
 }
 
-export default function SimulationReport() {
-  const { showReport, reportData, isLoadingReport, healthScores } = useSimulation()
-  const dispatch = useSimulationDispatch()
+type RerunTarget = {
+  day: number
+  prompt: string
+  options: string[]
+  originalChoice: string
+  decisionPointId: string
+}
 
-  if (!showReport && !isLoadingReport) return null
+export default function SimulationReport() {
+  const { showReport, reportData, isLoadingReport, healthScores, previousReport, rerunFromDay, projectId, isRerunning } = useSimulation()
+  const dispatch = useSimulationDispatch()
+  const [rerunTarget, setRerunTarget] = useState<RerunTarget | null>(null)
+  const [rerunInput, setRerunInput] = useState('')
+  const [showingPrevious, setShowingPrevious] = useState(false)
+
+  if (!showReport && !isLoadingReport && !isRerunning) return null
 
   if (isLoadingReport) {
     return (
@@ -47,9 +59,72 @@ export default function SimulationReport() {
     )
   }
 
+  if (isRerunning) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm">
+        <div className="flex flex-col items-center gap-4">
+          <span className="w-8 h-8 border-2 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
+          <span className="text-sm text-gray-400">Branching simulation...</span>
+        </div>
+      </div>
+    )
+  }
+
   if (!reportData) return null
 
-  const gradeStyle = GRADE_COLORS[reportData.grade] || GRADE_COLORS.C
+  const displayReport = showingPrevious && previousReport ? previousReport : reportData
+  const gradeStyle = GRADE_COLORS[displayReport.grade] || GRADE_COLORS.C
+
+  const handleRerunFrom = (d: SimulationReportData['decisionAnalysis'][number]) => {
+    if (!d.decisionPointId || !d.prompt || !d.options) return
+    setRerunTarget({
+      day: d.day,
+      prompt: d.prompt,
+      options: d.options,
+      originalChoice: d.originalChoice || d.decision,
+      decisionPointId: d.decisionPointId,
+    })
+    setRerunInput('')
+  }
+
+  const handleRerunSubmit = async () => {
+    if (!rerunTarget || !rerunInput.trim()) return
+    const currentReport = reportData
+
+    dispatch({ type: 'START_RERUN', previousReport: currentReport })
+    setRerunTarget(null)
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/rerun`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          decisionPointId: rerunTarget.decisionPointId,
+          newChoice: rerunInput.trim(),
+          currentReport,
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        console.error('[rerun] Failed:', err.error)
+        dispatch({ type: 'SHOW_REPORT', report: currentReport })
+        return
+      }
+
+      const data = await res.json()
+      dispatch({
+        type: 'RERUN_READY',
+        branchDay: data.branchDay,
+        nodes: data.nodes,
+        edges: data.edges,
+        healthScores: data.healthScores,
+      })
+    } catch (err) {
+      console.error('[rerun] Error:', err)
+      dispatch({ type: 'SHOW_REPORT', report: currentReport })
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm p-4">
@@ -58,11 +133,28 @@ export default function SimulationReport() {
         <div className="px-6 py-5 border-b border-gray-800 flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-4">
             <div className={`w-16 h-16 rounded-xl border-2 flex items-center justify-center text-3xl font-bold ${gradeStyle}`}>
-              {reportData.grade}
+              {displayReport.grade}
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white">Simulation Complete</h2>
-              <p className="text-sm text-gray-400 mt-0.5">{reportData.headline}</p>
+              <h2 className="text-lg font-semibold text-white">
+                {showingPrevious ? 'Original Report' : 'Simulation Complete'}
+              </h2>
+              <p className="text-sm text-gray-400 mt-0.5">{displayReport.headline}</p>
+              {/* Grade comparison for reruns */}
+              {previousReport && !showingPrevious && (
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`text-sm font-bold ${GRADE_COLORS[previousReport.grade]?.split(' ')[0] || 'text-gray-400'}`}>
+                    {previousReport.grade}
+                  </span>
+                  <span className="text-gray-600 text-xs">&rarr;</span>
+                  <span className={`text-sm font-bold ${GRADE_COLORS[reportData.grade]?.split(' ')[0] || 'text-gray-400'}`}>
+                    {reportData.grade}
+                  </span>
+                  <span className="text-[10px] text-gray-600 ml-1">
+                    Branched from Day {(rerunFromDay ?? 0) + 1}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
           <button
@@ -77,7 +169,7 @@ export default function SimulationReport() {
         <div className="overflow-y-auto flex-1 px-6 py-5 space-y-6">
           {/* Summary */}
           <div>
-            <p className="text-sm text-gray-300 leading-relaxed">{reportData.summary}</p>
+            <p className="text-sm text-gray-300 leading-relaxed">{displayReport.summary}</p>
           </div>
 
           {/* Health Score Comparison */}
@@ -107,11 +199,11 @@ export default function SimulationReport() {
           </div>
 
           {/* Key Moments */}
-          {reportData.keyMoments.length > 0 && (
+          {displayReport.keyMoments.length > 0 && (
             <div>
               <h3 className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Key Moments</h3>
               <div className="space-y-2">
-                {reportData.keyMoments.map((m, i) => (
+                {displayReport.keyMoments.map((m, i) => (
                   <div key={i} className="flex gap-3 items-start">
                     <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
                       m.impact === 'positive' ? 'bg-green-950/40 text-green-400' :
@@ -134,11 +226,11 @@ export default function SimulationReport() {
           )}
 
           {/* Decision Analysis */}
-          {reportData.decisionAnalysis.length > 0 && (
+          {displayReport.decisionAnalysis.length > 0 && (
             <div>
               <h3 className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Your Decisions</h3>
               <div className="space-y-2">
-                {reportData.decisionAnalysis.map((d, i) => (
+                {displayReport.decisionAnalysis.map((d, i) => (
                   <div key={i} className="bg-gray-900 rounded-lg px-4 py-3 border border-gray-800/50">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-[10px] text-gray-600 font-mono">Day {d.day + 1}</span>
@@ -148,8 +240,69 @@ export default function SimulationReport() {
                     </div>
                     <p className="text-sm text-white font-medium">&ldquo;{d.decision}&rdquo;</p>
                     <p className="text-xs text-gray-400 mt-1">{d.explanation}</p>
+                    {/* Rerun button — only on the current (non-previous) report with valid metadata */}
+                    {!showingPrevious && d.decisionPointId && (
+                      <button
+                        onClick={() => handleRerunFrom(d)}
+                        className="mt-2 text-[11px] text-blue-400 hover:text-blue-300 transition-colors flex items-center gap-1"
+                      >
+                        &#8634; Rerun from this decision
+                      </button>
+                    )}
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Rerun sub-dialog */}
+          {rerunTarget && (
+            <div className="bg-blue-950/20 border border-blue-500/30 rounded-lg px-4 py-4 space-y-3">
+              <h4 className="text-xs text-blue-400 uppercase tracking-wider font-semibold">
+                Rerun from Day {rerunTarget.day + 1}
+              </h4>
+              <p className="text-sm text-gray-300">{rerunTarget.prompt}</p>
+              <div className="text-xs text-gray-500">
+                Original choice: <span className="line-through text-gray-600">{rerunTarget.originalChoice}</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {rerunTarget.options
+                  .filter((opt) => opt !== rerunTarget.originalChoice)
+                  .map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={() => setRerunInput(opt)}
+                      className={`text-xs px-3 py-1.5 rounded-lg border transition-colors ${
+                        rerunInput === opt
+                          ? 'border-blue-500 bg-blue-500/20 text-blue-300'
+                          : 'border-gray-700 bg-gray-800 text-gray-300 hover:border-gray-600'
+                      }`}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+              </div>
+              <input
+                value={rerunInput}
+                onChange={(e) => setRerunInput(e.target.value)}
+                placeholder="Or type a custom decision..."
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-blue-500"
+                onKeyDown={(e) => e.key === 'Enter' && handleRerunSubmit()}
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setRerunTarget(null)}
+                  className="px-3 py-1.5 text-xs text-gray-400 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRerunSubmit}
+                  disabled={!rerunInput.trim()}
+                  className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors font-medium"
+                >
+                  Rerun Simulation
+                </button>
               </div>
             </div>
           )}
@@ -159,7 +312,7 @@ export default function SimulationReport() {
             <div>
               <h3 className="text-xs text-green-500/80 uppercase tracking-wider font-semibold mb-2">What Went Well</h3>
               <ul className="space-y-1.5">
-                {reportData.whatWentWell.map((item, i) => (
+                {displayReport.whatWentWell.map((item, i) => (
                   <li key={i} className="text-xs text-gray-300 flex gap-2">
                     <span className="text-green-500 flex-shrink-0 mt-0.5">+</span>
                     {item}
@@ -170,7 +323,7 @@ export default function SimulationReport() {
             <div>
               <h3 className="text-xs text-red-500/80 uppercase tracking-wider font-semibold mb-2">What Went Wrong</h3>
               <ul className="space-y-1.5">
-                {reportData.whatWentWrong.map((item, i) => (
+                {displayReport.whatWentWrong.map((item, i) => (
                   <li key={i} className="text-xs text-gray-300 flex gap-2">
                     <span className="text-red-500 flex-shrink-0 mt-0.5">-</span>
                     {item}
@@ -183,15 +336,15 @@ export default function SimulationReport() {
           {/* Root Cause Analysis */}
           <div className="bg-gray-900/50 rounded-lg px-4 py-3 border border-gray-800/50">
             <h3 className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-2">Root Cause Analysis</h3>
-            <p className="text-sm text-gray-300 leading-relaxed">{reportData.rootCauseAnalysis}</p>
+            <p className="text-sm text-gray-300 leading-relaxed">{displayReport.rootCauseAnalysis}</p>
           </div>
 
           {/* Recommendations */}
-          {reportData.recommendations.length > 0 && (
+          {displayReport.recommendations.length > 0 && (
             <div>
               <h3 className="text-xs text-gray-500 uppercase tracking-wider font-semibold mb-3">Recommendations</h3>
               <div className="space-y-2">
-                {reportData.recommendations.map((r, i) => (
+                {displayReport.recommendations.map((r, i) => (
                   <div key={i} className="flex gap-3 items-start">
                     <span className={`flex-shrink-0 text-[9px] px-1.5 py-0.5 rounded border font-semibold uppercase ${PRIORITY_BADGES[r.priority] || PRIORITY_BADGES.medium}`}>
                       {r.priority}
@@ -208,7 +361,17 @@ export default function SimulationReport() {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-gray-800 flex-shrink-0 flex justify-end">
+        <div className="px-6 py-3 border-t border-gray-800 flex-shrink-0 flex justify-between">
+          <div>
+            {previousReport && (
+              <button
+                onClick={() => setShowingPrevious(!showingPrevious)}
+                className="px-4 py-2 text-xs text-gray-400 hover:text-white transition-colors"
+              >
+                {showingPrevious ? 'View New Report' : 'View Original Report'}
+              </button>
+            )}
+          </div>
           <button
             onClick={() => dispatch({ type: 'DISMISS_REPORT' })}
             className="px-5 py-2 text-sm bg-gray-800 hover:bg-gray-700 text-white rounded-lg transition-colors font-medium"

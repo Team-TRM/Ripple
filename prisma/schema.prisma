@@ -22,6 +22,8 @@ model Project {
   graphEdges      Json?    // GraphEdge[] — stored in-memory graph edges
   speakerProfiles Json?    // SpeakerProfile[] — named speaker agents per cohort
   populationStats Json?    // PopulationStats[] — virtual population per cohort
+  previousReport  Json?    // SimulationReportData — saved when starting a rerun
+  rerunFromDay    Int?     // which day the current rerun branched from
 
   questions ProjectQuestion[]
   cohorts   Cohort[]
@@ -71,12 +73,13 @@ model TimelineEvent {
 }
 
 model Tick {
-  id           String @id @default(cuid())
-  projectId    String
-  dayNumber    Int
-  tickIndex    Int    @default(0) // 0=morning, 1=afternoon, 2=evening
-  subTickIndex Int    @default(0) // 0=generate, 1=observe, 2=update
-  dateLabel    String
+  id            String @id @default(cuid())
+  projectId     String
+  dayNumber     Int
+  tickIndex     Int    @default(0) // 0=morning, 1=afternoon, 2=evening
+  subTickIndex  Int    @default(0) // 0=generate, 1=observe, 2=update
+  dateLabel     String
+  graphSnapshot Json?  // { nodes, edges } — graph state at this tick for rerun branching
 
   project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   messages    Message[]

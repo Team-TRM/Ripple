@@ -74,7 +74,7 @@ function SimulatingOverlay() {
 }
 
 function DashboardInner({ projectId }: { projectId: string }) {
-  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex, isGenerating, simulationDays, edges } = useSimulation()
+  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex, isGenerating, simulationDays, edges, rerunFromDay } = useSimulation()
   const dispatch = useSimulationDispatch()
   const playingRef = useRef(false)
   const steppingRef = useRef(false)
@@ -140,6 +140,20 @@ function DashboardInner({ projectId }: { projectId: string }) {
       wakeRef.current = null
     }
   }, [pendingUserEvent, dispatch])
+
+  // Reset position when a rerun starts — play loop resumes from branch point
+  useEffect(() => {
+    if (rerunFromDay !== null) {
+      fetchPositionRef.current = { day: rerunFromDay, tickIndex: 2 }
+      messageQueueRef.current.length = 0
+      if (drainTimerRef.current) {
+        clearTimeout(drainTimerRef.current)
+        drainTimerRef.current = null
+      }
+      pendingTickRef.current = null
+      pendingDecisionRef.current = null
+    }
+  }, [rerunFromDay])
 
   // Drain message queue one by one with staggered timing (runs independently of fetches)
   const drainMessages = useCallback(() => {

@@ -47,7 +47,10 @@ export type SimulationReportData = {
   headline: string
   summary: string
   keyMoments: { day: number; title: string; description: string; impact: string; healthImpact: number }[]
-  decisionAnalysis: { day: number; decision: string; effectiveness: string; explanation: string }[]
+  decisionAnalysis: {
+    day: number; decision: string; effectiveness: string; explanation: string
+    decisionPointId?: string; prompt?: string; options?: string[]; originalChoice?: string
+  }[]
   whatWentWell: string[]
   whatWentWrong: string[]
   recommendations: { title: string; description: string; priority: string }[]
@@ -79,6 +82,9 @@ export type SimState = {
   showReport: boolean
   reportData: SimulationReportData | null
   isLoadingReport: boolean
+  previousReport: SimulationReportData | null
+  rerunFromDay: number | null
+  isRerunning: boolean
 }
 
 type SimAction =
@@ -101,6 +107,9 @@ type SimAction =
   | { type: 'SET_LOADING_REPORT'; loading: boolean }
   | { type: 'SHOW_REPORT'; report: SimulationReportData }
   | { type: 'DISMISS_REPORT' }
+  | { type: 'START_RERUN'; previousReport: SimulationReportData }
+  | { type: 'RERUN_READY'; branchDay: number; nodes: GraphNode[]; edges: GraphEdge[]; healthScores: HealthScores }
+  | { type: 'CLEAR_RERUN' }
 
 function simReducer(state: SimState, action: SimAction): SimState {
   switch (action.type) {
@@ -156,6 +165,32 @@ function simReducer(state: SimState, action: SimAction): SimState {
       return { ...state, showReport: true, reportData: action.report, isLoadingReport: false }
     case 'DISMISS_REPORT':
       return { ...state, showReport: false }
+    case 'START_RERUN':
+      return {
+        ...state,
+        isRerunning: true,
+        previousReport: action.previousReport,
+        showReport: false,
+        reportData: null,
+      }
+    case 'RERUN_READY':
+      return {
+        ...state,
+        isRerunning: false,
+        rerunFromDay: action.branchDay,
+        currentDay: action.branchDay,
+        currentTickIndex: 2,
+        currentSubTickIndex: 2,
+        nodes: action.nodes,
+        edges: action.edges,
+        healthScores: action.healthScores,
+        messages: [],
+        showReport: false,
+        reportData: null,
+        isPlaying: true,
+      }
+    case 'CLEAR_RERUN':
+      return { ...state, previousReport: null, rerunFromDay: null }
     default:
       return state
   }
@@ -170,7 +205,7 @@ export function SimulationProvider({
   initialTimelineEvents,
 }: {
   children: ReactNode
-  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'executiveRecommendations' | 'populationStats' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents' | 'showReport' | 'reportData' | 'isLoadingReport'>
+  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'executiveRecommendations' | 'populationStats' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents' | 'showReport' | 'reportData' | 'isLoadingReport' | 'previousReport' | 'rerunFromDay' | 'isRerunning'>
   initialTimelineEvents?: TimelineEvent[]
 }) {
   const [state, dispatch] = useReducer(simReducer, {
@@ -189,6 +224,9 @@ export function SimulationProvider({
     showReport: false,
     reportData: null,
     isLoadingReport: false,
+    previousReport: null,
+    rerunFromDay: null,
+    isRerunning: false,
   })
 
   return (

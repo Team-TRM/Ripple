@@ -104,7 +104,22 @@ export async function POST(
       ),
     })
 
-    return NextResponse.json(report)
+    // Enrich report with decision point metadata for rerun UI
+    const enrichedReport = {
+      ...report,
+      decisionAnalysis: report.decisionAnalysis.map((da) => {
+        const match = decisions.find((d) => d.tick.dayNumber === da.day)
+        return {
+          ...da,
+          decisionPointId: match?.id,
+          prompt: match?.prompt,
+          options: match?.options as string[],
+          originalChoice: match?.chosenOption,
+        }
+      }),
+    }
+
+    return NextResponse.json(enrichedReport)
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.error('Failed to generate report:', msg)
