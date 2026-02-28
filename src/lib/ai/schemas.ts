@@ -56,7 +56,7 @@ export type TickResponse = z.infer<typeof TickResponseSchema>
 // --- Graph generation ---
 export const GraphNodeSchema = z.object({
   label: z.string(),
-  type: z.enum(['public', 'government', 'media', 'employees', 'company', 'influencer', 'regulator']),
+  type: z.enum(['public', 'government', 'media', 'employees', 'company', 'influencer', 'regulator']).catch('public'),
   cohortName: z.string().nullable().optional(),
   sentiment: z.number().min(-1).max(1),
   activation: z.number().min(0).max(1),
@@ -80,6 +80,7 @@ export const GraphSetupSchema = z.object({
     regulatoryPressure: z.number().int().min(0).max(100),
     internalStability: z.number().int().min(0).max(100),
     fraudRisk: z.number().int().min(0).max(100),
+    publicAwareness: z.number().int().min(0).max(100).optional().default(10),
   }),
 })
 export type GraphSetup = z.infer<typeof GraphSetupSchema>
@@ -91,6 +92,7 @@ export const EnhancedMessageSchema = z.object({
   content: z.string(),
   reach: z.number().transform((v) => Math.max(0, Math.min(1, v))),
   sentiment: z.number().transform((v) => Math.max(-1, Math.min(1, v))),
+  speakerId: z.string().optional().catch(undefined),
 })
 
 export const CohortUpdateSchema = z.object({
@@ -98,9 +100,9 @@ export const CohortUpdateSchema = z.object({
   mood: z.enum(['Calm', 'Concerned', 'Angry', 'Confused', 'Fatigued']).catch('Concerned'),
   dominantNarrative: z.string(),
   behaviours: z.array(z.string()),
-  sentimentDelta: z.number().transform((v) => Math.max(-0.15, Math.min(0.15, v))),
-  activationDelta: z.number().transform((v) => Math.max(-0.15, Math.min(0.15, v))),
-  trustDelta: z.number().transform((v) => Math.max(-0.15, Math.min(0.15, v))),
+  sentimentDelta: z.number().transform((v) => Math.max(-0.25, Math.min(0.25, v))),
+  activationDelta: z.number().transform((v) => Math.max(-0.25, Math.min(0.25, v))),
+  trustDelta: z.number().transform((v) => Math.max(-0.25, Math.min(0.25, v))),
 })
 
 export const DecisionPromptSchema = z.object({
@@ -114,10 +116,73 @@ export const SecondaryEventSchema = z.object({
   type: z.enum(['viral_spike', 'misinformation_wave', 'scam_wave', 'whistleblower_leak', 'regulatory_action']),
 })
 
+export const HealthDeltasSchema = z.object({
+  overallDelta: z.number().transform((v) => Math.max(-5, Math.min(8, v))),
+  publicSentimentDelta: z.number().transform((v) => Math.max(-5, Math.min(8, v))),
+  mediaHeatDelta: z.number().transform((v) => Math.max(-6, Math.min(5, v))),
+  regulatoryPressureDelta: z.number().transform((v) => Math.max(-6, Math.min(5, v))),
+  internalStabilityDelta: z.number().transform((v) => Math.max(-5, Math.min(8, v))),
+  fraudRiskDelta: z.number().transform((v) => Math.max(-6, Math.min(5, v))),
+  publicAwarenessDelta: z.number().transform((v) => Math.max(0, Math.min(8, v))).optional().default(0),
+})
+
+export const NewNodeSchema = z.object({
+  label: z.string(),
+  type: z.enum(['public', 'government', 'media', 'employees', 'company', 'influencer', 'regulator']).catch('public'),
+  sentiment: z.number().transform((v) => Math.max(-1, Math.min(1, v))),
+  activation: z.number().transform((v) => Math.max(0, Math.min(1, v))),
+  trustInCompany: z.number().transform((v) => Math.max(0, Math.min(1, v))),
+  connectTo: z.array(z.string()).min(1).max(3),
+})
+
 export const EnhancedTickResponseSchema = z.object({
   messages: z.array(EnhancedMessageSchema).min(1),
   cohortUpdates: z.array(CohortUpdateSchema).min(1),
+  healthDeltas: HealthDeltasSchema.optional().catch(undefined),
   decisionPrompt: DecisionPromptSchema.optional().catch(undefined),
   secondaryEvents: z.array(SecondaryEventSchema).optional().catch(undefined),
+  newNodes: z.array(NewNodeSchema).optional().catch(undefined),
 })
 export type EnhancedTickResponse = z.infer<typeof EnhancedTickResponseSchema>
+
+// --- Speaker profiles ---
+export const SpeakerProfileSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  handle: z.string(),
+  cohortName: z.string(),
+  role: z.string(),
+  personality: z.string(),
+  messageType: z.enum(['news', 'influencer', 'official', 'forum', 'secondary']).catch('forum'),
+  reach: z.number().transform((v) => Math.max(0, Math.min(1, v))),
+})
+export type SpeakerProfile = z.infer<typeof SpeakerProfileSchema>
+
+export const SpeakerProfilesResponseSchema = z.object({
+  speakers: z.array(SpeakerProfileSchema).min(10).max(30),
+})
+export type SpeakerProfilesResponse = z.infer<typeof SpeakerProfilesResponseSchema>
+
+// --- Executive recommendations ---
+export const ExecutiveRecommendationSchema = z.object({
+  role: z.string(),
+  name: z.string(),
+  recommendation: z.string(),
+  reasoning: z.string(),
+})
+export type ExecutiveRecommendation = z.infer<typeof ExecutiveRecommendationSchema>
+
+export const ExecutiveAdvisorySchema = z.object({
+  recommendations: z.array(ExecutiveRecommendationSchema).min(4).max(4),
+})
+export type ExecutiveAdvisory = z.infer<typeof ExecutiveAdvisorySchema>
+
+// --- Population stats ---
+export const PopulationStatsSchema = z.object({
+  cohortName: z.string(),
+  population: z.number().int(),
+  activeSpeakers: z.number().int(),
+  aggregateSentiment: z.number().transform((v) => Math.max(-1, Math.min(1, v))),
+  trendDirection: z.enum(['improving', 'stable', 'declining']),
+})
+export type PopulationStats = z.infer<typeof PopulationStatsSchema>

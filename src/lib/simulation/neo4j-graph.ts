@@ -109,9 +109,9 @@ function applyNodeUpdates(
       ? nodes.filter((n) => n.nodeId === update.nodeId)
       : nodes.filter((n) => n.label === update.cohortName)
 
-    const sd = Math.max(-0.15, Math.min(0.15, update.sentimentDelta))
-    const ad = Math.max(-0.15, Math.min(0.15, update.activationDelta))
-    const td = Math.max(-0.15, Math.min(0.15, update.trustDelta))
+    const sd = Math.max(-0.25, Math.min(0.25, update.sentimentDelta))
+    const ad = Math.max(-0.25, Math.min(0.25, update.activationDelta))
+    const td = Math.max(-0.25, Math.min(0.25, update.trustDelta))
 
     for (const node of matchingNodes) {
       node.sentiment = Math.max(-1, Math.min(1, node.sentiment + sd))
@@ -161,7 +161,7 @@ function applyInfluencePropagation(nodes: GraphNode[], edges: GraphEdge[]): void
 
 function applyActivationDecay(nodes: GraphNode[]): void {
   for (const node of nodes) {
-    node.activation = node.activation * 0.92
+    node.activation = node.activation * 0.97
   }
 }
 
@@ -172,9 +172,10 @@ export function calculateHealthScoresFromNodes(nodes: GraphNode[]): {
   regulatoryPressure: number
   internalStability: number
   fraudRisk: number
+  publicAwareness: number
 } {
   if (nodes.length === 0) {
-    return { overall: 50, publicSentiment: 50, mediaHeat: 30, regulatoryPressure: 20, internalStability: 70, fraudRisk: 15 }
+    return { overall: 50, publicSentiment: 50, mediaHeat: 30, regulatoryPressure: 20, internalStability: 70, fraudRisk: 15, publicAwareness: 10 }
   }
 
   const avg = (filtered: number[]) => filtered.length > 0 ? filtered.reduce((a, b) => a + b, 0) / filtered.length : null
@@ -199,6 +200,11 @@ export function calculateHealthScoresFromNodes(nodes: GraphNode[]): {
     0.1 * (100 - fraudRisk)
   )
 
+  // Awareness derived from media + public activation
+  const awarenessFromMedia = medHeat ?? 10
+  const awarenessFromPublic = avg(nodes.filter((n) => n.type === 'public').map((n) => n.activation * 100))
+  const publicAwareness = Math.round((awarenessFromMedia * 0.6 + (awarenessFromPublic ?? 10) * 0.4))
+
   return {
     overall: Math.max(0, Math.min(100, overall)),
     publicSentiment: Math.max(0, Math.min(100, publicSentiment)),
@@ -206,6 +212,7 @@ export function calculateHealthScoresFromNodes(nodes: GraphNode[]): {
     regulatoryPressure: Math.max(0, Math.min(100, regulatoryPressure)),
     internalStability: Math.max(0, Math.min(100, internalStability)),
     fraudRisk: Math.max(0, Math.min(100, fraudRisk)),
+    publicAwareness: Math.max(0, Math.min(100, publicAwareness)),
   }
 }
 
@@ -216,11 +223,42 @@ export function calculateHealthScoresFromNodes(nodes: GraphNode[]): {
  */
 export async function processTickUpdates(
   projectId: string,
-  cohortUpdates: { nodeId?: string; cohortName?: string; sentimentDelta: number; activationDelta: number; trustDelta: number; dominantNarrative?: string; behaviours?: string[] }[]
-): Promise<{ nodes: GraphNode[]; healthScores: ReturnType<typeof calculateHealthScoresFromNodes> }> {
+  cohortUpdates: { nodeId?: string; cohortName?: string; sentimentDelta: number; activationDelta: number; trustDelta: number; dominantNarrative?: string; behaviours?: string[] }[],
+  newNodes?: { label: string; type: string; sentiment: number; activation: number; trustInCompany: number; connectTo: string[] }[]
+): Promise<{ nodes: GraphNode[]; edges: GraphEdge[]; healthScores: ReturnType<typeof calculateHealthScoresFromNodes> }> {
   const { nodes, edges } = await getProjectGraph(projectId)
   if (nodes.length === 0) {
-    return { nodes: [], healthScores: calculateHealthScoresFromNodes([]) }
+    return { nodes: [], edges: [], healthScores: calculateHealthScoresFromNodes([]) }
+  }
+
+  // Phase 0: Add new nodes from LLM
+  if (newNodes?.length) {
+    for (const nn of newNodes) {
+      // Skip if a node with this label already exists
+      if (nodes.some((n) => n.label === nn.label)) continue
+      const newNode: GraphNode = {
+        nodeId: generateId(),
+        label: nn.label,
+        type: nn.type,
+        color: NODE_COLORS[nn.type] || '#6B7280',
+        sentiment: nn.sentiment,
+        activation: nn.activation,
+        trustInCompany: nn.trustInCompany,
+      }
+      nodes.push(newNode)
+      // Create edges to connected nodes
+      for (const targetLabel of nn.connectTo) {
+        const target = nodes.find((n) => n.label === targetLabel)
+        if (target) {
+          edges.push({
+            source: newNode.nodeId,
+            target: target.nodeId,
+            weight: 0.5,
+            type: 'influence',
+          })
+        }
+      }
+    }
   }
 
   // Phase 1: Apply LLM-generated deltas
@@ -232,14 +270,17 @@ export async function processTickUpdates(
   // Phase 3: Decay
   applyActivationDecay(nodes)
 
-  // Single write
+  // Single write (nodes + edges since new nodes may have been added)
   await prisma.project.update({
     where: { id: projectId },
-    data: { graphNodes: nodes as unknown as Prisma.InputJsonValue },
+    data: {
+      graphNodes: nodes as unknown as Prisma.InputJsonValue,
+      graphEdges: edges as unknown as Prisma.InputJsonValue,
+    },
   })
 
   const healthScores = calculateHealthScoresFromNodes(nodes)
-  return { nodes, healthScores }
+  return { nodes, edges, healthScores }
 }
 
 // Legacy wrappers (kept for confirm route / graph route compatibility)

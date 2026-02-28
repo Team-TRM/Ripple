@@ -16,7 +16,23 @@ export async function GET(
 
   try {
     const graphData = await getProjectGraph(id)
-    const healthScores = await calculateHealthScores(id)
+
+    // Prefer stored health scores (LLM-driven) over node-derived
+    const lastHealthRecord = await prisma.healthScore.findFirst({
+      where: { tick: { projectId: id } },
+      orderBy: { tick: { id: 'desc' } },
+    })
+    const healthScores = lastHealthRecord
+      ? {
+          overall: lastHealthRecord.overall,
+          publicSentiment: lastHealthRecord.publicSentiment,
+          mediaHeat: lastHealthRecord.mediaHeat,
+          regulatoryPressure: lastHealthRecord.regulatoryPressure,
+          internalStability: lastHealthRecord.internalStability,
+          fraudRisk: lastHealthRecord.fraudRisk,
+          publicAwareness: lastHealthRecord.publicAwareness ?? 10,
+        }
+      : await calculateHealthScores(id)
 
     return NextResponse.json({
       nodes: graphData.nodes,

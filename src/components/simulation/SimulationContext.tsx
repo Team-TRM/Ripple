@@ -29,6 +29,7 @@ export type HealthScores = {
   regulatoryPressure: number
   internalStability: number
   fraudRisk: number
+  publicAwareness: number
 }
 
 export type SimMessage = {
@@ -38,9 +39,25 @@ export type SimMessage = {
   content: string
   reach: number
   sentiment: number
+  speakerId?: string
   dayNumber?: number
   tickIndex?: number
   timestamp?: string
+}
+
+export type ExecutiveRecommendation = {
+  role: string
+  name: string
+  recommendation: string
+  reasoning: string
+}
+
+export type PopulationStats = {
+  cohortName: string
+  population: number
+  activeSpeakers: number
+  aggregateSentiment: number
+  trendDirection: 'improving' | 'stable' | 'declining'
 }
 
 export type TimelineEvent = {
@@ -49,6 +66,18 @@ export type TimelineEvent = {
   title: string
   description: string
   isUserInjected?: boolean
+}
+
+export type SimulationReportData = {
+  grade: string
+  headline: string
+  summary: string
+  keyMoments: { day: number; title: string; description: string; impact: string; healthImpact: number }[]
+  decisionAnalysis: { day: number; decision: string; effectiveness: string; explanation: string }[]
+  whatWentWell: string[]
+  whatWentWrong: string[]
+  recommendations: { title: string; description: string; priority: string }[]
+  rootCauseAnalysis: string
 }
 
 export type SimState = {
@@ -68,9 +97,14 @@ export type SimState = {
   selectedNodeId: string | null
   showDecisionDialog: boolean
   decisionPrompt: { prompt: string; options: string[] } | null
+  executiveRecommendations: ExecutiveRecommendation[] | null
+  populationStats: PopulationStats[]
   isGenerating: boolean
   eventInputOpen: boolean
   pendingUserEvent: string | null
+  showReport: boolean
+  reportData: SimulationReportData | null
+  isLoadingReport: boolean
 }
 
 type SimAction =
@@ -81,14 +115,18 @@ type SimAction =
   | { type: 'SET_PLAYING'; isPlaying: boolean }
   | { type: 'SET_PAUSED'; isPaused: boolean }
   | { type: 'SELECT_NODE'; nodeId: string | null }
-  | { type: 'SHOW_DECISION'; prompt: string; options: string[] }
+  | { type: 'SHOW_DECISION'; prompt: string; options: string[]; executiveRecommendations?: ExecutiveRecommendation[] }
   | { type: 'DISMISS_DECISION' }
-  | { type: 'UPDATE_NODES'; nodes: GraphNode[] }
+  | { type: 'SET_POPULATION_STATS'; stats: PopulationStats[] }
+  | { type: 'UPDATE_NODES'; nodes: GraphNode[]; edges?: GraphEdge[] }
   | { type: 'SET_GENERATING'; isGenerating: boolean }
   | { type: 'ADD_TIMELINE_EVENT'; event: TimelineEvent }
   | { type: 'SET_TIMELINE_EVENTS'; events: TimelineEvent[] }
   | { type: 'SET_EVENT_INPUT_OPEN'; open: boolean }
   | { type: 'SET_PENDING_USER_EVENT'; event: string | null }
+  | { type: 'SET_LOADING_REPORT'; loading: boolean }
+  | { type: 'SHOW_REPORT'; report: SimulationReportData }
+  | { type: 'DISMISS_REPORT' }
 
 function simReducer(state: SimState, action: SimAction): SimState {
   switch (action.type) {
@@ -116,12 +154,15 @@ function simReducer(state: SimState, action: SimAction): SimState {
         ...state,
         showDecisionDialog: true,
         decisionPrompt: { prompt: action.prompt, options: action.options },
+        executiveRecommendations: action.executiveRecommendations || null,
         isPlaying: false,
       }
     case 'DISMISS_DECISION':
-      return { ...state, showDecisionDialog: false, decisionPrompt: null, isPlaying: true }
+      return { ...state, showDecisionDialog: false, decisionPrompt: null, executiveRecommendations: null }
+    case 'SET_POPULATION_STATS':
+      return { ...state, populationStats: action.stats }
     case 'UPDATE_NODES':
-      return { ...state, nodes: action.nodes }
+      return { ...state, nodes: action.nodes, ...(action.edges ? { edges: action.edges } : {}) }
     case 'SET_GENERATING':
       return { ...state, isGenerating: action.isGenerating }
     case 'ADD_TIMELINE_EVENT':
@@ -132,6 +173,12 @@ function simReducer(state: SimState, action: SimAction): SimState {
       return { ...state, eventInputOpen: action.open, isPlaying: action.open ? false : state.isPlaying }
     case 'SET_PENDING_USER_EVENT':
       return { ...state, pendingUserEvent: action.event }
+    case 'SET_LOADING_REPORT':
+      return { ...state, isLoadingReport: action.loading }
+    case 'SHOW_REPORT':
+      return { ...state, showReport: true, reportData: action.report, isLoadingReport: false }
+    case 'DISMISS_REPORT':
+      return { ...state, showReport: false }
     default:
       return state
   }
@@ -146,7 +193,7 @@ export function SimulationProvider({
   initialTimelineEvents,
 }: {
   children: ReactNode
-  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents'>
+  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'executiveRecommendations' | 'populationStats' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents' | 'showReport' | 'reportData' | 'isLoadingReport'>
   initialTimelineEvents?: TimelineEvent[]
 }) {
   const [state, dispatch] = useReducer(simReducer, {
@@ -156,10 +203,15 @@ export function SimulationProvider({
     selectedNodeId: null,
     showDecisionDialog: false,
     decisionPrompt: null,
+    executiveRecommendations: null,
+    populationStats: [],
     isPlaying: false,
     isGenerating: false,
     eventInputOpen: false,
     pendingUserEvent: null,
+    showReport: false,
+    reportData: null,
+    isLoadingReport: false,
   })
 
   return (

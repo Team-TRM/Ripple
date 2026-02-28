@@ -127,8 +127,10 @@ export default function ProjectPage() {
         setProject(data)
         setCohorts(data.cohorts || [])
         setEvents(data.events || [])
-        if (data.events?.length) {
-          setSimulationDays(data.events.length)
+        if (data.simulationDays) {
+          setSimulationDays(data.simulationDays)
+        } else if (data.events?.length) {
+          setSimulationDays(Math.max(7, data.events.length))
         }
       }
       setIsLoading(false)
@@ -430,45 +432,13 @@ export default function ProjectPage() {
 
             {/* Confirm */}
             <div className="pt-2">
-              {isConfirming && confirmSteps.length > 0 && (
-                <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
-                  <div className="space-y-2">
-                    {confirmSteps.map((s, i) => (
-                      <div key={i} className="flex items-center gap-3">
-                        {s.status === 'done' ? (
-                          <span className="text-green-400 text-sm">&#10003;</span>
-                        ) : s.status === 'error' ? (
-                          <span className="text-red-400 text-sm">&#10007;</span>
-                        ) : (
-                          <span className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
-                        )}
-                        <span className={`text-sm ${
-                          s.status === 'done' ? 'text-gray-400' :
-                          s.status === 'error' ? 'text-red-400' :
-                          'text-white'
-                        }`}>
-                          {s.step}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               <div className="flex justify-end">
                 <button
                   onClick={handleConfirm}
                   disabled={isConfirming}
                   className="bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white px-8 py-3 rounded-xl font-semibold transition-colors"
                 >
-                  {isConfirming ? (
-                    <span className="flex items-center gap-3">
-                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Starting...
-                    </span>
-                  ) : (
-                    'Start Simulation'
-                  )}
+                  Start Simulation
                 </button>
               </div>
             </div>
@@ -478,6 +448,58 @@ export default function ProjectPage() {
           null
         )}
       </div>
+
+      {/* Full-screen generation progress overlay */}
+      {isConfirming && (
+        <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-center">
+          <div className="max-w-md w-full mx-4">
+            <div className="mb-8 text-center">
+              <div className="w-12 h-12 border-3 border-blue-400/30 border-t-blue-400 rounded-full animate-spin mx-auto mb-4" />
+              <h2 className="text-xl font-bold text-white mb-1">Building Simulation</h2>
+              <p className="text-sm text-gray-500">Setting up your crisis scenario...</p>
+            </div>
+
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              {(() => {
+                const activeStep = confirmSteps.find((s) => s.status !== 'done' && s.status !== 'error')
+                const doneCount = confirmSteps.filter((s) => s.status === 'done').length
+                return (
+                  <div className="space-y-4">
+                    {activeStep ? (
+                      <div className="flex items-center gap-3">
+                        {activeStep.status === 'error' ? (
+                          <span className="text-red-400 text-sm flex-shrink-0">&#10007;</span>
+                        ) : (
+                          <span className="w-4 h-4 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
+                        )}
+                        <span className={`text-sm ${activeStep.status === 'error' ? 'text-red-400' : 'text-white'}`}>
+                          {activeStep.step}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-3">
+                        <span className="text-green-400 text-sm flex-shrink-0">&#10003;</span>
+                        <span className="text-sm text-gray-400">Complete</span>
+                      </div>
+                    )}
+                    {confirmSteps.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-blue-500 rounded-full transition-all duration-500"
+                            style={{ width: `${(doneCount / 10) * 100}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] text-gray-500 tabular-nums">{doneCount}/10</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Full-screen dashboard overlay for running mode */}
       {project.status === 'running' && (

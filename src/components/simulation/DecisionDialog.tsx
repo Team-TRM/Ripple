@@ -3,29 +3,46 @@
 import { useState } from 'react'
 import { useSimulation, useSimulationDispatch } from './SimulationContext'
 
+const EXEC_ICONS: Record<string, string> = {
+  CTO: '🔧',
+  'Head of PR': '📢',
+  'Legal Counsel': '⚖️',
+  'Head of Operations': '📊',
+}
+
+const EXEC_COLORS: Record<string, string> = {
+  CTO: 'border-blue-500/30 bg-blue-950/10',
+  'Head of PR': 'border-amber-500/30 bg-amber-950/10',
+  'Legal Counsel': 'border-purple-500/30 bg-purple-950/10',
+  'Head of Operations': 'border-emerald-500/30 bg-emerald-950/10',
+}
+
+const EXEC_ACCENT: Record<string, string> = {
+  CTO: 'text-blue-400',
+  'Head of PR': 'text-amber-400',
+  'Legal Counsel': 'text-purple-400',
+  'Head of Operations': 'text-emerald-400',
+}
+
 export default function DecisionDialog({ projectId }: { projectId: string }) {
-  const { showDecisionDialog, decisionPrompt, currentDay, currentTickIndex } = useSimulation()
+  const { showDecisionDialog, decisionPrompt, executiveRecommendations, currentDay, currentTickIndex } = useSimulation()
   const dispatch = useSimulationDispatch()
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [customInput, setCustomInput] = useState('')
-  const [showCustomInput, setShowCustomInput] = useState(false)
+  const [input, setInput] = useState('')
 
   if (!showDecisionDialog || !decisionPrompt) return null
 
   const handleSubmit = async (choice: string) => {
+    if (!choice.trim()) return
     setIsSubmitting(true)
     try {
       const res = await fetch(`/api/projects/${projectId}/decide`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chosenOption: choice,
-          userEvent: customInput.trim() || undefined,
-        }),
+        body: JSON.stringify({ chosenOption: choice }),
       })
 
       if (res.ok) {
-        // Show decision as official announcement in the feed
         const TICK_LABELS = ['Morning', 'Afternoon', 'Evening']
         dispatch({
           type: 'ADD_MESSAGES',
@@ -38,12 +55,14 @@ export default function DecisionDialog({ projectId }: { projectId: string }) {
             sentiment: 0,
             dayNumber: currentDay,
             tickIndex: currentTickIndex,
-            timestamp: `Day ${currentDay} · ${TICK_LABELS[currentTickIndex] || 'Morning'}`,
+            timestamp: `Day ${currentDay + 1} · ${TICK_LABELS[currentTickIndex] || 'Morning'}`,
           }],
         })
         dispatch({ type: 'DISMISS_DECISION' })
-        setCustomInput('')
-        setShowCustomInput(false)
+        setInput('')
+        // Resume play immediately — the decide endpoint already invalidated
+        // future ticks, so the next step will generate a fresh tick reflecting the decision
+        dispatch({ type: 'SET_PLAYING', isPlaying: true })
       }
     } catch (err) {
       console.error('Failed to submit decision:', err)
@@ -52,110 +71,104 @@ export default function DecisionDialog({ projectId }: { projectId: string }) {
     }
   }
 
-  const handleCustomSubmit = () => {
-    if (customInput.trim()) {
-      handleSubmit(customInput.trim())
-    }
-  }
+  const hasExecRecs = executiveRecommendations && executiveRecommendations.length > 0
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl max-w-lg w-full mx-4 overflow-hidden shadow-2xl">
+      <div className={`bg-gray-900 border border-gray-700 rounded-2xl ${hasExecRecs ? 'max-w-2xl' : 'max-w-lg'} w-full mx-4 overflow-hidden shadow-2xl max-h-[90vh] flex flex-col`}>
         {/* Header */}
-        <div className="px-6 py-4 border-b border-gray-800 bg-red-950/30">
-          <div className="flex items-center gap-2">
-            <span className="text-red-400 text-lg">&#9888;</span>
-            <h2 className="text-sm font-semibold text-red-300 uppercase tracking-wider">
-              Decision Required
-            </h2>
+        <div className="px-6 py-4 border-b border-gray-800 bg-red-950/30 flex-shrink-0">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-red-400 text-lg">&#9888;</span>
+              <h2 className="text-sm font-semibold text-red-300 uppercase tracking-wider">
+                End of Day {currentDay + 1} Brief
+              </h2>
+            </div>
+            <span className="text-[10px] text-gray-500 font-mono">Decision Required</span>
           </div>
         </div>
 
-        {/* Prompt */}
-        <div className="px-6 py-5">
-          <p className="text-gray-200 text-sm leading-relaxed">
-            {decisionPrompt.prompt}
-          </p>
-        </div>
+        <div className="overflow-y-auto flex-1">
+          {/* Daily Brief */}
+          <div className="px-6 py-4">
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">Situation Report</div>
+            <p className="text-gray-200 text-sm leading-relaxed">
+              {decisionPrompt.prompt}
+            </p>
+          </div>
 
-        {/* Options */}
-        <div className="px-6 pb-4 space-y-2">
-          {decisionPrompt.options.map((option, i) => (
-            <button
-              key={i}
-              onClick={() => handleSubmit(option)}
-              disabled={isSubmitting}
-              className="w-full text-left px-4 py-3 rounded-lg bg-gray-800/60 hover:bg-gray-700/80 border border-gray-700/50 hover:border-gray-600 text-gray-200 text-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed group"
-            >
-              <div className="flex items-center gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-700 group-hover:bg-gray-600 flex items-center justify-center text-xs text-gray-400 font-mono flex-shrink-0">
-                  {i + 1}
-                </span>
-                <span>{option}</span>
+          {/* Executive Recommendations (click to fill input) */}
+          {hasExecRecs && (
+            <div className="px-6 pb-3">
+              <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">
+                Executive Recommendations
               </div>
-            </button>
-          ))}
+              <div className="grid grid-cols-2 gap-2">
+                {executiveRecommendations.map((rec) => (
+                  <button
+                    key={rec.role}
+                    type="button"
+                    onClick={() => setInput(rec.recommendation)}
+                    className={`text-left rounded-lg border p-2.5 transition-all cursor-pointer hover:brightness-125 ${EXEC_COLORS[rec.role] || 'border-gray-700/30 bg-gray-800/10'}`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-sm">{EXEC_ICONS[rec.role] || '👤'}</span>
+                      <span className={`text-[11px] font-semibold ${EXEC_ACCENT[rec.role] || 'text-gray-300'}`}>
+                        {rec.name}
+                      </span>
+                      <span className="text-[9px] text-gray-600">{rec.role}</span>
+                    </div>
+                    <p className="text-xs text-gray-200 font-medium leading-relaxed">
+                      {rec.recommendation}
+                    </p>
+                    <p className="text-[10px] text-gray-500 leading-relaxed mt-0.5 italic">
+                      {rec.reasoning}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-          {/* Custom Input Option */}
-          {!showCustomInput ? (
-            <button
-              onClick={() => setShowCustomInput(true)}
-              disabled={isSubmitting}
-              className="w-full text-left px-4 py-3 rounded-lg bg-gray-800/30 hover:bg-gray-800/60 border border-dashed border-gray-700/50 hover:border-gray-600 text-gray-400 text-sm transition-all disabled:opacity-50"
-            >
-              <div className="flex items-center gap-3">
-                <span className="w-6 h-6 rounded-full bg-gray-800 flex items-center justify-center text-xs text-gray-500 font-mono flex-shrink-0">
-                  +
-                </span>
-                <span>Enter custom response...</span>
-              </div>
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <textarea
-                value={customInput}
-                onChange={(e) => setCustomInput(e.target.value)}
-                placeholder="Describe the action you want to take..."
-                className="w-full bg-gray-800 border border-gray-600 rounded-lg px-4 py-3 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500 transition-colors"
-                rows={3}
+          {/* CEO Decision Input */}
+          <div className="px-6 pb-4">
+            {hasExecRecs && <div className="border-t border-gray-800 mb-3" />}
+            <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">
+              Your Decision, CEO
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={hasExecRecs ? 'Click a recommendation or type your own...' : 'Type your decision...'}
+                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
                 autoFocus
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    handleCustomSubmit()
-                  }
-                  if (e.key === 'Escape') {
-                    setShowCustomInput(false)
-                    setCustomInput('')
+                    handleSubmit(input)
                   }
                 }}
               />
-              <div className="flex gap-2 justify-end">
-                <button
-                  onClick={() => {
-                    setShowCustomInput(false)
-                    setCustomInput('')
-                  }}
-                  className="px-3 py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCustomSubmit}
-                  disabled={isSubmitting || !customInput.trim()}
-                  className="px-4 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors"
-                >
-                  Submit
-                </button>
-              </div>
+              <button
+                onClick={() => handleSubmit(input)}
+                disabled={isSubmitting || !input.trim()}
+                className="px-5 py-2.5 text-sm bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded-lg transition-colors font-medium"
+              >
+                Enter
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Footer hint */}
-        <div className="px-6 py-3 border-t border-gray-800 bg-gray-900/50">
+        {/* Footer */}
+        <div className="px-6 py-2.5 border-t border-gray-800 bg-gray-900/50 flex-shrink-0">
           <p className="text-[10px] text-gray-600 text-center">
-            The simulation is paused until you make a decision.
+            {hasExecRecs
+              ? 'Click a recommendation to use it, or type your own decision.'
+              : 'The simulation is paused until you make a decision.'}
           </p>
         </div>
       </div>

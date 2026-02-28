@@ -18,8 +18,10 @@ model Project {
   isPaused       Boolean  @default(true)
   createdAt      DateTime @default(now())
   status         String   @default("setup") // setup | questions | ready | running
-  graphNodes     Json?    // GraphNode[] — stored in-memory graph state
-  graphEdges     Json?    // GraphEdge[] — stored in-memory graph edges
+  graphNodes      Json?    // GraphNode[] — stored in-memory graph state
+  graphEdges      Json?    // GraphEdge[] — stored in-memory graph edges
+  speakerProfiles Json?    // SpeakerProfile[] — named speaker agents per cohort
+  populationStats Json?    // PopulationStats[] — virtual population per cohort
 
   questions ProjectQuestion[]
   cohorts   Cohort[]
@@ -124,6 +126,7 @@ model HealthScore {
   regulatoryPressure Int // 0-100
   internalStability  Int // 0-100
   fraudRisk          Int // 0-100
+  publicAwareness    Int @default(10) // 0-100, how widely known the crisis is
 
   tick Tick @relation(fields: [tickId], references: [id], onDelete: Cascade)
 }
@@ -134,8 +137,9 @@ model DecisionPoint {
   tickId       String
   prompt       String  @db.Text
   options      Json // string[]
-  chosenOption String?
-  userEvent    String? @db.Text
+  chosenOption              String?
+  userEvent                String? @db.Text
+  executiveRecommendations Json?   // ExecutiveRecommendation[]
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   tick    Tick    @relation(fields: [tickId], references: [id], onDelete: Cascade)

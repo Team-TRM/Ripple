@@ -1,17 +1,16 @@
 import { mistral } from './client'
-import { EnhancedTickResponseSchema, type EnhancedTickResponse } from './schemas'
+import { EnhancedTickResponseSchema, type EnhancedTickResponse, type SpeakerProfile } from './schemas'
 
 const TICK_PERIOD_LABELS = ['Morning', 'Afternoon', 'Evening'] as const
 
-const SYSTEM_PROMPT = `You are a crisis simulation engine. Generate realistic media content, audience perception updates, and optionally crisis decision points.
+const SYSTEM_PROMPT = `You are a crisis simulation engine. Generate realistic media content, audience perception updates, health score changes, and optionally crisis decision points.
 
 Return ONLY valid JSON:
 {
   "messages": [
-    { "type": "news", "author": "News Outlet Name", "content": "Article text...", "reach": 0.7, "sentiment": -0.4 },
-    { "type": "influencer", "author": "@TechBlogger", "content": "Social media post...", "reach": 0.5, "sentiment": -0.3 },
-    { "type": "forum", "author": "Affected Customer (General Public)", "content": "Forum post from this cohort's perspective...", "reach": 0.3, "sentiment": -0.6 },
-    { "type": "influencer", "author": "Industry Analyst (Business Partners)", "content": "Different perspective...", "reach": 0.4, "sentiment": 0.1 }
+    { "type": "news", "author": "News Outlet Name", "content": "Article text...", "reach": 0.7, "sentiment": -0.4, "speakerId": "sp3" },
+    { "type": "influencer", "author": "@TechBlogger (Tech Community)", "content": "Social media post...", "reach": 0.5, "sentiment": -0.3, "speakerId": "sp7" },
+    { "type": "forum", "author": "Affected Customer (General Public)", "content": "Forum post...", "reach": 0.3, "sentiment": -0.6, "speakerId": "sp12" }
   ],
   "cohortUpdates": [
     {
@@ -19,39 +18,101 @@ Return ONLY valid JSON:
       "mood": "Concerned",
       "dominantNarrative": "One sentence.",
       "behaviours": ["checking news", "sharing on social media"],
-      "sentimentDelta": -0.05,
-      "activationDelta": 0.08,
-      "trustDelta": -0.03
+      "sentimentDelta": -0.10,
+      "activationDelta": 0.15,
+      "trustDelta": -0.08
     }
   ],
+  "healthDeltas": {
+    "overallDelta": -3,
+    "publicAwarenessDelta": 5,
+    "publicSentimentDelta": -4,
+    "mediaHeatDelta": 3,
+    "regulatoryPressureDelta": 2,
+    "internalStabilityDelta": -2,
+    "fraudRiskDelta": 1
+  },
   "decisionPrompt": {
     "prompt": "Media is demanding a response. How should the company react?",
     "options": ["Issue formal apology", "Release technical explanation", "No comment"]
-  },
-  "secondaryEvents": [
-    { "title": "Viral Spike", "description": "A leaked memo goes viral...", "type": "viral_spike" }
-  ]
+  }
 }
 
 Rules:
 - Message types: news, influencer, official, forum, secondary
 - Generate 4-8 messages per tick, varying by time of day
 - CRITICAL: Social media and forum messages MUST represent DIFFERENT cohorts with DIFFERENT viewpoints:
-  - Some messages should be supportive ("Good on them for disclosing quickly")
-  - Some should be angry ("Absolutely unacceptable, I'm switching providers")
-  - Some should be analytical ("Let's wait for the full picture before reacting")
-  - Include the cohort name in parentheses in the author field: "@username (Cohort Name)"
-  - Each cohort has its own bias — affected customers are angrier, industry analysts are more measured, employees defend or leak
-- reach: 0-1, how widely this spreads
-- sentiment: -1 to 1. Vary this across messages — NOT everything is negative. Some voices defend, some attack, some are neutral.
-- Morning: breaking news, overnight developments, early social reactions. Afternoon: social media eruption, forum debates, influencer takes. Evening: official responses, analysis, wrap-up.
-- If "Last decision" context is provided: generate messages reacting TO that decision. Some approve, some criticize. Include an "official" type message announcing the decision.
-- cohortUpdates: one per cohort. Deltas bounded to ±0.15
+  - Some supportive, some angry, some analytical
+  - Each cohort has its own bias
+- SPEAKER AGENTS: If speaker profiles are provided, use their names, handles, and personalities to write messages IN CHARACTER.
+  - Set "author" to the speaker's handle or name
+  - Set "speakerId" to match the speaker's id
+  - Write content that matches the speaker's personality and role
+  - You don't have to use every speaker each tick — pick 4-8 relevant ones
+  - If no speaker profiles are provided, generate generic authors as before
+- reach: 0-1. sentiment: -1 to 1. Vary across messages.
+- Morning: breaking news, early reactions. Afternoon: social media eruption, debates. Evening: official responses, analysis, end-of-day summary.
+- AWARENESS DYNAMICS: When publicAwareness is LOW (< 30), most people don't know about the crisis yet:
+  - Morning Day 1-2: Only insider leaks, niche media. Low reach messages.
+  - As awareness grows: mainstream media picks up, hashtags emerge, trending topics.
+  - After company announcements: rapid awareness spike, broader public reaction.
+- If "Last decision" context is provided: generate messages reacting TO it. Some approve, some criticize. Include an "official" type announcing it.
+
+COHORT UPDATES:
+- One per cohort. Deltas bounded to ±0.25
+- Use LARGE deltas (±0.10 to ±0.25) for major events. Small deltas (±0.03 to ±0.08) for routine ticks.
 - mood: Calm, Concerned, Angry, Confused, Fatigued
 - behaviours: 2-4 realistic actions
-- decisionPrompt: include ONLY at significant turning points (maybe 1 in 4 ticks). Provide 2-3 options.
-- secondaryEvents: rare (maybe 1 in 5 ticks). Types: viral_spike, misinformation_wave, scam_wave, whistleblower_leak, regulatory_action
-- Content evolves: early ticks = uncertainty/breaking news, mid = anger/investigation, late = fatigue/resolution
+- If a good decision was made: sentimentDelta and trustDelta should be POSITIVE for cohorts that approve.
+
+HEALTH DELTAS (REQUIRED — always include this):
+- These directly adjust the company's health dashboard. They are INTEGER changes applied to current scores (0-100 scale).
+- CRITICAL: Changes must be VERY GRADUAL. The simulation runs 14 days (42 ticks). If scores drop 5 per tick, health reaches 0 in 10 ticks (3 days). That is TOO FAST.
+- overallDelta: Net company health change. Negative = crisis worsening, positive = recovery. Range: -5 to +8.
+  - MOST ticks: -1 to -2 (slow decline from ongoing crisis). This is the DEFAULT.
+  - Bad news breaks: -3 to -4
+  - Major crisis escalation: -5 (RARE — only once or twice in 14 days)
+  - Company makes a GOOD decision: +3 to +6. IMPORTANT: good decisions MUST improve health.
+  - Company makes a GREAT decision: +6 to +8
+- publicAwarenessDelta: How much MORE the public learns this tick. ALWAYS POSITIVE or zero — never shrinks. Range: 0 to +8.
+  - Day 0-2: Very slow growth (+1 to +2 per tick). Almost nobody knows yet. Only insiders.
+  - Day 3-4: Slow growth (+2 to +4) as first reporters pick it up.
+  - Day 5+: After company announcements or viral moments (+4 to +8).
+  - Most ticks should be +1 to +2. Only major public events warrant +5 or more.
+- publicSentimentDelta: Public opinion shift. Range: -5 to +8.
+  - When publicAwareness < 30: sentiment changes MUST be tiny (-1 to +1) because few people know.
+  - Good company decision: MUST be positive (+2 to +5). The public rewards responsiveness.
+  - Bad decision or cover-up: -3 to -5.
+- mediaHeatDelta: Media scrutiny. POSITIVE = more heat (bad). Range: -6 to +5.
+- regulatoryPressureDelta: Regulatory attention. POSITIVE = more pressure (bad). Range: -6 to +5.
+- internalStabilityDelta: Employee morale. NEGATIVE = destabilizing (bad). Range: -5 to +8.
+  - Good company decision: +2 to +5 (employees feel reassured).
+- fraudRiskDelta: Fraud/scam risk. POSITIVE = more risk (bad). Range: -6 to +5.
+- REWARD GOOD DECISIONS: When the company makes a smart, proactive decision:
+  - overallDelta MUST be positive (+3 to +8)
+  - publicSentimentDelta MUST be positive (+2 to +5)
+  - internalStabilityDelta MUST be positive (+2 to +5)
+  - mediaHeatDelta should be negative (-2 to -4) as the story cools
+  - This is critical — the user should see their good decisions reflected in improving scores.
+
+DECISION PROMPT — END OF DAY ONLY:
+- ONLY include "decisionPrompt" when tickIndex=2 (Evening tick). This is the END OF DAY briefing.
+- Do NOT include decisionPrompt on Morning (tickIndex=0) or Afternoon (tickIndex=1) ticks.
+- Every Evening tick MUST include a decisionPrompt — this is the CEO's daily decision point.
+- The prompt should be a DAILY BRIEF: summarize what happened today, then present the key decision.
+- CRITICAL: If a BREAKING DEVELOPMENT or crisis escalation occurred today (look for breaking news in recent messages), the decision MUST be about responding to THAT crisis — not a generic daily summary. The CEO needs to decide how to handle the most urgent issue.
+- Include 2-3 options for the CEO to choose from.
+- secondaryEvents: rare. Types: viral_spike, misinformation_wave, scam_wave, whistleblower_leak, regulatory_action
+
+NEW NODES (optional — include 0-1 per tick to expand the stakeholder graph):
+- Add "newNodes" array when new stakeholders emerge (e.g., a regulator enters, a new media outlet picks up the story, a whistleblower group forms).
+- Each new node: { "label": "SEC Investigation", "type": "regulator", "sentiment": -0.3, "activation": 0.8, "trustInCompany": 0.2, "connectTo": ["existing node label 1", "existing node label 2"] }
+- "connectTo" lists labels of existing nodes this new node should connect to (1-3 connections).
+- Types: public, government, media, employees, company, influencer, regulator
+- Only add new nodes when narratively justified (new actors entering the crisis). Most ticks should NOT add nodes.
+- Maximum 1 new node per tick.
+
+- Content evolves: early = uncertainty, mid = anger/investigation, late = fatigue/resolution
 - Return ONLY JSON. No markdown.`
 
 type EnhancedTickInput = {
@@ -62,8 +123,10 @@ type EnhancedTickInput = {
   previousStates?: { cohortName: string; mood: string; dominantNarrative: string; sentiment: number; activation: number }[]
   recentMessages?: string[]
   lastDecision?: string
-  healthScores?: { overall: number; publicSentiment: number; mediaHeat: number }
+  healthScores?: { overall: number; publicSentiment: number; mediaHeat: number; regulatoryPressure: number; internalStability: number; fraudRisk: number; publicAwareness: number }
   userEvent?: string
+  speakerProfiles?: SpeakerProfile[]
+  nodeLabels?: string[]
 }
 
 export async function generateEnhancedTick(input: EnhancedTickInput): Promise<EnhancedTickResponse> {
@@ -88,11 +151,25 @@ export async function generateEnhancedTick(input: EnhancedTickInput): Promise<En
     : ''
 
   const healthBlock = input.healthScores
-    ? `Current health: overall=${input.healthScores.overall}, publicSentiment=${input.healthScores.publicSentiment}, mediaHeat=${input.healthScores.mediaHeat}`
+    ? `Current health scores (0-100): overall=${input.healthScores.overall}, publicAwareness=${input.healthScores.publicAwareness}, publicSentiment=${input.healthScores.publicSentiment}, mediaHeat=${input.healthScores.mediaHeat}, regulatoryPressure=${input.healthScores.regulatoryPressure}, internalStability=${input.healthScores.internalStability}, fraudRisk=${input.healthScores.fraudRisk}`
     : ''
 
   const userEventBlock = input.userEvent
-    ? `\n**BREAKING DEVELOPMENT** (injected by user): ${input.userEvent}\nThis new development MUST significantly impact the generated content and cohort updates. React to this event realistically.\nIMPORTANT: Because this is a major breaking development, you MUST include a "decisionPrompt" in your response with 2-3 options for the company to respond to this development. The cohort sentimentDelta and activationDelta should be large (±0.10 to ±0.15) to reflect the crisis escalation.`
+    ? `\n**BREAKING DEVELOPMENT** (injected by user): ${input.userEvent}
+This is a MAJOR breaking event. Your response MUST follow this structure:
+1. The FIRST message MUST be type "news" — a dramatic breaking news alert headline about this event (e.g. "BREAKING: [headline]"). High reach (0.7-0.9), strong negative sentiment.
+2. The remaining messages should be reactions from different cohorts — social media outrage, expert analysis, insider panic, etc.
+3. Do NOT include a "decisionPrompt" — decisions are only made at the end of the day.
+4. Cohort sentimentDelta and activationDelta should be LARGE (±0.10 to ±0.25) to reflect the crisis escalation.
+5. healthDeltas should reflect the severity — overallDelta should be negative (-3 to -5), mediaHeatDelta strongly positive (+3 to +5).`
+    : ''
+
+  const speakerBlock = input.speakerProfiles?.length
+    ? `\nSpeaker agents (use these named individuals for messages — set speakerId to match):\n${input.speakerProfiles.map((s) => `- id="${s.id}" ${s.handle} (${s.cohortName}): ${s.role}. Personality: ${s.personality}. Type: ${s.messageType}, reach: ${s.reach}`).join('\n')}`
+    : ''
+
+  const nodeLabelsBlock = input.nodeLabels?.length
+    ? `\nExisting graph nodes (use these labels for connectTo): ${input.nodeLabels.join(', ')}`
     : ''
 
   const userPrompt = `Crisis: ${input.crisisContext}
@@ -109,6 +186,8 @@ Recent messages:
 ${recentBlock}
 ${decisionBlock}
 ${healthBlock}
+${speakerBlock}
+${nodeLabelsBlock}
 ${userEventBlock}
 
 Generate media content and cohort updates for this ${period.toLowerCase()} tick.`

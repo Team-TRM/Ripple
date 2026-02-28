@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
+import { Prisma } from '@/generated/prisma/client'
 import { generateTick } from '@/lib/ai/generate-tick'
 import { generateGraph } from '@/lib/ai/generate-graph'
-import { createProjectGraph, deleteProjectGraph } from '@/lib/simulation/neo4j-graph'
+import { generateSpeakerProfiles } from '@/lib/ai/generate-speakers'
+import { createProjectGraph, deleteProjectGraph, getProjectGraph } from '@/lib/simulation/neo4j-graph'
+import { initializePopulationStats } from '@/lib/simulation/population-engine'
 
 type EditedCohort = { id: string; name: string; description: string }
 type EditedEvent = { id: string; title: string; description: string }
@@ -189,17 +192,37 @@ export async function POST(
             regulatoryPressure: graphSetup.healthScores.regulatoryPressure,
             internalStability: graphSetup.healthScores.internalStability,
             fraudRisk: graphSetup.healthScores.fraudRisk,
+            publicAwareness: graphSetup.healthScores.publicAwareness ?? 10,
           },
         })
         send('Calculating health scores...', 'done')
 
-        // Step 8: Activate
+        // Step 8: Generate speaker profiles
+        send('Creating speaker agents...')
+        const speakerData = await generateSpeakerProfiles(
+          project.context,
+          updated.cohorts.map((c) => ({ name: c.name, description: c.description }))
+        )
+        send('Creating speaker agents...', 'done')
+
+        // Step 9: Initialize population stats
+        send('Initializing population...')
+        const graphData = await getProjectGraph(id)
+        const populationStats = initializePopulationStats(
+          updated.cohorts.map((c) => ({ name: c.name, description: c.description })),
+          graphData.nodes
+        )
+        send('Initializing population...', 'done')
+
+        // Step 10: Activate
         send('Launching simulation...')
         await prisma.project.update({
           where: { id },
           data: {
             simulationDays,
             status: 'running',
+            speakerProfiles: speakerData.speakers as unknown as Prisma.InputJsonValue,
+            populationStats: populationStats as unknown as Prisma.InputJsonValue,
           },
         })
         send('Launching simulation...', 'done')

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useRef, useEffect, useState } from 'react'
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useSimulation, useSimulationDispatch } from './SimulationContext'
 
@@ -35,20 +35,26 @@ export default function GraphVisualization() {
   const containerRef = useRef<HTMLDivElement>(null)
   // Animation clock updated via setInterval (not RAF to avoid perf issues)
   const tickRef = useRef(0)
+  // Stable node map — preserves x/y positions across updates
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nodeMapRef = useRef<Map<string, any>>(new Map())
 
   useEffect(() => {
     const id = setInterval(() => { tickRef.current++ }, 50)
     return () => clearInterval(id)
   }, [])
 
-  // Configure forces
+  // Configure forces only once
+  const forcesConfigured = useRef(false)
   useEffect(() => {
-    if (!graphRef.current) return
+    if (!graphRef.current || forcesConfigured.current) return
+    if (nodes.length === 0) return
+    forcesConfigured.current = true
     const fg = graphRef.current
     if (fg.d3Force) {
-      fg.d3Force('charge')?.strength(-350)?.distanceMax(450)
-      fg.d3Force('link')?.distance(140)
-      fg.d3Force('center')?.strength(0.04)
+      fg.d3Force('charge')?.strength(-600)?.distanceMax(700)
+      fg.d3Force('link')?.distance(200)
+      fg.d3Force('center')?.strength(0.03)
     }
   }, [nodes])
 
@@ -79,22 +85,56 @@ export default function GraphVisualization() {
     return () => obs.disconnect()
   }, [])
 
-  const graphData = {
-    nodes: nodes.map((n) => ({
-      id: n.nodeId,
-      label: n.label,
-      type: n.type,
-      color: NODE_COLORS[n.type] || n.color || '#6B7280',
-      sentiment: n.sentiment,
-      activation: n.activation,
-      trustInCompany: n.trustInCompany,
-    })),
-    links: edges.map((e) => ({
-      source: e.source,
-      target: e.target,
-      weight: e.weight,
-    })),
-  }
+  // Build stable graphData — update properties in place, only add/remove nodes when needed
+  const graphData = useMemo(() => {
+    const currentIds = new Set(nodes.map((n) => n.nodeId))
+    const existingIds = new Set(nodeMapRef.current.keys())
+
+    // Update existing nodes in place (preserves x/y/vx/vy from force sim)
+    for (const n of nodes) {
+      const existing = nodeMapRef.current.get(n.nodeId)
+      if (existing) {
+        existing.label = n.label
+        existing.type = n.type
+        existing.color = NODE_COLORS[n.type] || n.color || '#6B7280'
+        existing.sentiment = n.sentiment
+        existing.activation = n.activation
+        existing.trustInCompany = n.trustInCompany
+      } else {
+        // New node — spread initial positions in a circle to avoid clustering
+        const idx = nodeMapRef.current.size
+        const angle = (idx / Math.max(nodes.length, 1)) * Math.PI * 2
+        const spread = 250 + Math.random() * 150
+        nodeMapRef.current.set(n.nodeId, {
+          id: n.nodeId,
+          label: n.label,
+          type: n.type,
+          color: NODE_COLORS[n.type] || n.color || '#6B7280',
+          sentiment: n.sentiment,
+          activation: n.activation,
+          trustInCompany: n.trustInCompany,
+          x: Math.cos(angle) * spread,
+          y: Math.sin(angle) * spread,
+        })
+      }
+    }
+
+    // Remove deleted nodes
+    for (const id of existingIds) {
+      if (!currentIds.has(id)) {
+        nodeMapRef.current.delete(id)
+      }
+    }
+
+    return {
+      nodes: Array.from(nodeMapRef.current.values()),
+      links: edges.map((e) => ({
+        source: e.source,
+        target: e.target,
+        weight: e.weight,
+      })),
+    }
+  }, [nodes, edges])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const nodeCanvasObject = useCallback((node: any, ctx: CanvasRenderingContext2D) => {
@@ -166,36 +206,39 @@ export default function GraphVisualization() {
       ctx.fillText(badge, x, y)
     }
 
-    // Label below node
-    const fontSize = Math.max(9, 10 + activation * 2)
-    ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
-    ctx.textAlign = 'center'
-    ctx.textBaseline = 'top'
-    const ly = y + radius + 6
-    const label = node.label || ''
-    const tw = ctx.measureText(label).width + 6
+    // Label below node — only show for active nodes or selected node
+    if (activation > 0.35 || isSelected) {
+      const labelAlpha = isSelected ? 1 : Math.min(1, (activation - 0.35) / 0.3)
+      const fontSize = Math.max(9, 10 + activation * 2)
+      ctx.font = `600 ${fontSize}px Inter, system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'top'
+      const ly = y + radius + 6
+      const label = node.label || ''
+      const tw = ctx.measureText(label).width + 6
 
-    // Label background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.75)'
-    ctx.beginPath()
-    const pillX = x - tw / 2
-    const pillY = ly - 1
-    const pillH = fontSize + 3
-    const r = 3
-    ctx.moveTo(pillX + r, pillY)
-    ctx.lineTo(pillX + tw - r, pillY)
-    ctx.arcTo(pillX + tw, pillY, pillX + tw, pillY + r, r)
-    ctx.lineTo(pillX + tw, pillY + pillH - r)
-    ctx.arcTo(pillX + tw, pillY + pillH, pillX + tw - r, pillY + pillH, r)
-    ctx.lineTo(pillX + r, pillY + pillH)
-    ctx.arcTo(pillX, pillY + pillH, pillX, pillY + pillH - r, r)
-    ctx.lineTo(pillX, pillY + r)
-    ctx.arcTo(pillX, pillY, pillX + r, pillY, r)
-    ctx.closePath()
-    ctx.fill()
+      // Label background pill
+      ctx.fillStyle = `rgba(0,0,0,${0.75 * labelAlpha})`
+      ctx.beginPath()
+      const pillX = x - tw / 2
+      const pillY = ly - 1
+      const pillH = fontSize + 3
+      const r = 3
+      ctx.moveTo(pillX + r, pillY)
+      ctx.lineTo(pillX + tw - r, pillY)
+      ctx.arcTo(pillX + tw, pillY, pillX + tw, pillY + r, r)
+      ctx.lineTo(pillX + tw, pillY + pillH - r)
+      ctx.arcTo(pillX + tw, pillY + pillH, pillX + tw - r, pillY + pillH, r)
+      ctx.lineTo(pillX + r, pillY + pillH)
+      ctx.arcTo(pillX, pillY + pillH, pillX, pillY + pillH - r, r)
+      ctx.lineTo(pillX, pillY + r)
+      ctx.arcTo(pillX, pillY, pillX + r, pillY, r)
+      ctx.closePath()
+      ctx.fill()
 
-    ctx.fillStyle = `rgba(255,255,255,${Math.max(0.6, activation)})`
-    ctx.fillText(label, x, ly)
+      ctx.fillStyle = `rgba(255,255,255,${labelAlpha * Math.max(0.6, activation)})`
+      ctx.fillText(label, x, ly)
+    }
   }, [selectedNodeId])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -278,6 +321,7 @@ export default function GraphVisualization() {
         <ForceGraph2D
           ref={graphRef}
           graphData={graphData}
+          nodeId="id"
           width={dimensions.width}
           height={dimensions.height}
           backgroundColor="rgba(0,0,0,0)"
@@ -294,7 +338,7 @@ export default function GraphVisualization() {
           enablePanInteraction={true}
           minZoom={0.3}
           maxZoom={8}
-          warmupTicks={60}
+          warmupTicks={100}
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">

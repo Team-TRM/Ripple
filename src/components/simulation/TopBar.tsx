@@ -10,10 +10,29 @@ export default function TopBar() {
   const dispatch = useSimulationDispatch()
   const [eventText, setEventText] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  const prevOverallRef = useRef<number>(healthScores.overall)
+  const initializedRef = useRef(false)
+  const [healthDelta, setHealthDelta] = useState(0)
 
   const overall = healthScores.overall
   const healthColor =
     overall >= 60 ? 'text-green-400' : overall >= 35 ? 'text-yellow-400' : 'text-red-400'
+
+  // Track health score changes for arrow indicator (skip initial load)
+  useEffect(() => {
+    if (!initializedRef.current) {
+      initializedRef.current = true
+      prevOverallRef.current = overall
+      return
+    }
+    const delta = overall - prevOverallRef.current
+    if (delta !== 0) {
+      setHealthDelta(delta)
+      prevOverallRef.current = overall
+      const t = setTimeout(() => setHealthDelta(0), 3000)
+      return () => clearTimeout(t)
+    }
+  }, [overall])
 
   // Focus input when opened
   useEffect(() => {
@@ -51,7 +70,7 @@ export default function TopBar() {
           {projectName}
         </h1>
         <div className="flex items-center gap-2 text-xs font-mono">
-          <span className="text-gray-400">Day {currentDay}</span>
+          <span className="text-gray-400">Day {currentDay + 1}</span>
           <span className="text-gray-700">|</span>
           <span className="text-gray-500">{TICK_LABELS[currentTickIndex] || 'Morning'}</span>
         </div>
@@ -66,9 +85,19 @@ export default function TopBar() {
       {/* Center: health score */}
       <div className="flex items-center gap-2">
         <span className="text-xs text-gray-500 uppercase tracking-wider">Health</span>
-        <span className={`text-2xl font-bold font-mono transition-colors duration-500 ${healthColor}`}>
-          {overall}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-2xl font-bold font-mono transition-colors duration-500 ${healthColor}`}>
+            {overall}
+          </span>
+          {healthDelta !== 0 && (
+            <div className={`flex items-center gap-0.5 transition-opacity duration-300 ${healthDelta > 0 ? 'text-green-400' : 'text-red-400'}`}>
+              <span className="text-sm">{healthDelta > 0 ? '\u25B2' : '\u25BC'}</span>
+              <span className="text-xs font-mono font-semibold">
+                {healthDelta > 0 ? '+' : ''}{healthDelta}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Right: event input + play/pause */}

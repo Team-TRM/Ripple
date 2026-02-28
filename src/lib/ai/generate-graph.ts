@@ -29,7 +29,8 @@ Return ONLY valid JSON:
     "mediaHeat": 40,
     "regulatoryPressure": 30,
     "internalStability": 75,
-    "fraudRisk": 20
+    "fraudRisk": 20,
+    "publicAwareness": 10
   }
 }
 
@@ -44,6 +45,7 @@ Rules:
 - Edge types: "influence" (general), "trust" (trust-based), "information" (info channels)
 - Create realistic edge patterns — media influences public, public influences regulators, etc.
 - Health scores: 0-100, higher = better for the company. At crisis start, scores should reflect initial damage
+- publicAwareness: how widely known the crisis is. At the START, the crisis is NOT well known — set this LOW (5-15). It grows as media covers it and announcements are made.
 - Return ONLY JSON. No markdown, no extra text.`
 
 export async function generateGraph(

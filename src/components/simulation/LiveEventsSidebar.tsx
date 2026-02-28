@@ -14,7 +14,7 @@ const TYPE_STYLES: Record<string, { border: string; label: string; labelColor: s
 }
 
 export default function LiveEventsSidebar() {
-  const { messages } = useSimulation()
+  const { messages, timelineEvents, currentDay } = useSimulation()
   const scrollRef = useRef<HTMLDivElement>(null)
   const [animatedIds, setAnimatedIds] = useState<Set<string>>(new Set())
   const prevIdsRef = useRef<Set<string>>(new Set())
@@ -109,6 +109,35 @@ export default function LiveEventsSidebar() {
           </div>
         )}
       </div>
+
+      {/* Upcoming Timeline Events */}
+      {(() => {
+        const upcoming = timelineEvents
+          .filter((e) => e.dayNumber > currentDay)
+          .sort((a, b) => a.dayNumber - b.dayNumber)
+          .slice(0, 3)
+        if (upcoming.length === 0) return null
+        return (
+          <div className="border-t border-gray-800/50">
+            <div className="px-4 py-2 border-b border-gray-800/30">
+              <span className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold">Upcoming</span>
+            </div>
+            <div className="divide-y divide-gray-800/20">
+              {upcoming.map((evt) => (
+                <div key={evt.id} className="px-4 py-2.5">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-[9px] font-mono text-gray-600">Day {evt.dayNumber + 1}</span>
+                    {evt.isUserInjected && (
+                      <span className="text-[8px] text-amber-500 uppercase">injected</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-2">{evt.title}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       <style jsx>{`
         @keyframes slideIn {

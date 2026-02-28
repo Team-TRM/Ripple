@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
+import { Prisma } from '@/generated/prisma/client'
 import { generateEnhancedTick } from '@/lib/ai/generate-enhanced-tick'
+import { generateExecutiveAdvice } from '@/lib/ai/generate-executive-advice'
 import {
   getProjectGraph,
   processTickUpdates,
@@ -7,7 +9,9 @@ import {
   calculateHealthScores,
   calculateHealthScoresFromNodes,
 } from './neo4j-graph'
-import type { GraphNode } from './neo4j-graph'
+import { calculatePopulationStats } from './population-engine'
+import type { GraphNode, GraphEdge } from './neo4j-graph'
+import type { SpeakerProfile, ExecutiveRecommendation, PopulationStats } from '@/lib/ai/schemas'
 
 export type TickResult = {
   tick: {
@@ -23,8 +27,10 @@ export type TickResult = {
     content: string
     reach: number
     sentiment: number
+    speakerId?: string
   }[]
   nodes: GraphNode[]
+  edges?: GraphEdge[]
   healthScores: {
     overall: number
     publicSentiment: number
@@ -32,11 +38,14 @@ export type TickResult = {
     regulatoryPressure: number
     internalStability: number
     fraudRisk: number
+    publicAwareness: number
   }
   decisionPrompt?: {
     prompt: string
     options: string[]
   }
+  executiveRecommendations?: ExecutiveRecommendation[]
+  populationStats?: PopulationStats[]
 }
 
 // Track in-flight generation per project to prevent duplicates
@@ -80,6 +89,9 @@ async function generateAndStoreTick(
 
   if (!project) throw new Error('Project not found')
 
+  // Load speaker profiles from project
+  const speakerProfiles = (project.speakerProfiles as unknown as SpeakerProfile[]) || []
+
   const lastTick = project.ticks[0]
   const graphData = await getProjectGraph(projectId)
 
@@ -95,14 +107,41 @@ async function generateAndStoreTick(
   })
 
   // Phase 1: GENERATE (LLM call)
-  const recentMessages = lastTick?.messages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`) || []
-  const currentHealth = await calculateHealthScores(projectId)
+  // For evening ticks, load ALL messages from today so the decision reflects any crisis injected earlier
+  let recentMessages: string[]
+  if (tickIndex === 2) {
+    const todaysMessages = await prisma.message.findMany({
+      where: { tick: { projectId, dayNumber } },
+      orderBy: { id: 'asc' },
+      take: 15,
+    })
+    recentMessages = todaysMessages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`)
+  } else {
+    recentMessages = lastTick?.messages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`) || []
+  }
+
+  // Read last STORED health scores (LLM-driven), fallback to node-based calculation
+  const lastHealthRecord = await prisma.healthScore.findFirst({
+    where: { tick: { projectId } },
+    orderBy: { tick: { id: 'desc' } },
+  })
+  const currentHealth = lastHealthRecord
+    ? {
+        overall: lastHealthRecord.overall,
+        publicSentiment: lastHealthRecord.publicSentiment,
+        mediaHeat: lastHealthRecord.mediaHeat,
+        regulatoryPressure: lastHealthRecord.regulatoryPressure,
+        internalStability: lastHealthRecord.internalStability,
+        fraudRisk: lastHealthRecord.fraudRisk,
+        publicAwareness: lastHealthRecord.publicAwareness ?? 10,
+      }
+    : await calculateHealthScores(projectId)
 
   // Find the most recent resolved decision to feed into the LLM context
   const resolvedDecision = decision || (await prisma.decisionPoint.findFirst({
     where: { projectId, chosenOption: { not: null } },
     orderBy: { id: 'desc' },
-    select: { chosenOption: true, prompt: true },
+    select: { chosenOption: true, prompt: true, tick: { select: { dayNumber: true } } },
   }))
 
   const lastDecisionText = typeof resolvedDecision === 'string'
@@ -121,10 +160,12 @@ async function generateAndStoreTick(
     lastDecision: lastDecisionText,
     healthScores: currentHealth,
     userEvent,
+    speakerProfiles: speakerProfiles.length > 0 ? speakerProfiles : undefined,
+    nodeLabels: graphData.nodes.map((n) => n.label),
   })
 
   // Apply all graph mutations in one read-modify-write cycle
-  const { nodes: updatedNodes, healthScores } = await processTickUpdates(
+  const { nodes: updatedNodes, edges: updatedEdges } = await processTickUpdates(
     projectId,
     tickData.cohortUpdates.map((u) => ({
       cohortName: u.cohortName,
@@ -133,8 +174,25 @@ async function generateAndStoreTick(
       trustDelta: u.trustDelta,
       dominantNarrative: u.dominantNarrative,
       behaviours: u.behaviours,
-    }))
+    })),
+    tickData.newNodes,
   )
+
+  // Compute health scores: LLM deltas applied to current scores (primary driver)
+  const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)))
+  const hd = tickData.healthDeltas
+
+  const healthScores = hd
+    ? {
+        overall: clamp(currentHealth.overall + hd.overallDelta),
+        publicSentiment: clamp(currentHealth.publicSentiment + hd.publicSentimentDelta),
+        mediaHeat: clamp(currentHealth.mediaHeat + hd.mediaHeatDelta),
+        regulatoryPressure: clamp(currentHealth.regulatoryPressure + hd.regulatoryPressureDelta),
+        internalStability: clamp(currentHealth.internalStability + hd.internalStabilityDelta),
+        fraudRisk: clamp(currentHealth.fraudRisk + hd.fraudRiskDelta),
+        publicAwareness: clamp((currentHealth.publicAwareness ?? 10) + (hd.publicAwarenessDelta ?? 0)),
+      }
+    : calculateHealthScoresFromNodes(updatedNodes)
 
   const hotNodes = updatedNodes.filter((n) => n.activation > 0.85)
   if (hotNodes.length > 0) {
@@ -260,6 +318,7 @@ async function generateAndStoreTick(
         regulatoryPressure: healthScores.regulatoryPressure,
         internalStability: healthScores.internalStability,
         fraudRisk: healthScores.fraudRisk,
+        publicAwareness: healthScores.publicAwareness,
       },
       create: {
         tickId: updateTick.id,
@@ -269,20 +328,72 @@ async function generateAndStoreTick(
         regulatoryPressure: healthScores.regulatoryPressure,
         internalStability: healthScores.internalStability,
         fraudRisk: healthScores.fraudRisk,
+        publicAwareness: healthScores.publicAwareness,
       },
     })
   }
 
   await saveStateSnapshots(projectId, generateTick.id, dayNumber, tickIndex)
 
+  // Enforce: decisions ONLY on evening ticks (tickIndex === 2)
+  if (tickIndex !== 2) {
+    tickData.decisionPrompt = undefined
+  }
+
+  // If this is an evening tick, skip the EOD decision if user already made a decision today
+  // (e.g., from an injected event earlier in the day)
+  if (tickIndex === 2 && tickData.decisionPrompt) {
+    const todaysDecision = await prisma.decisionPoint.findFirst({
+      where: {
+        projectId,
+        chosenOption: { not: null },
+        tick: { dayNumber },
+      },
+    })
+    if (todaysDecision) {
+      console.log(`[tick-engine] Skipping EOD decision — user already decided today (day ${dayNumber})`)
+      tickData.decisionPrompt = undefined
+    }
+  }
+
+  // Generate executive recommendations if there's a decision prompt
+  let executiveRecommendations: ExecutiveRecommendation[] | undefined
   if (tickData.decisionPrompt) {
+    try {
+      const recentContext = recentMessages.slice(0, 3).join('; ')
+      const execAdvice = await generateExecutiveAdvice({
+        crisisContext: project.context,
+        decisionPrompt: tickData.decisionPrompt.prompt,
+        options: tickData.decisionPrompt.options,
+        healthScores,
+        recentContext,
+      })
+      executiveRecommendations = execAdvice.recommendations
+    } catch (err) {
+      console.error('[tick-engine] Executive advice generation failed (non-fatal):', err)
+    }
+
     await prisma.decisionPoint.create({
       data: {
         projectId,
         tickId: generateTick.id,
         prompt: tickData.decisionPrompt.prompt,
         options: tickData.decisionPrompt.options,
+        executiveRecommendations: executiveRecommendations
+          ? (executiveRecommendations as unknown as Prisma.InputJsonValue)
+          : undefined,
       },
+    })
+  }
+
+  // Compute population stats
+  let populationStats: PopulationStats[] | undefined
+  const previousPopulation = (project.populationStats as unknown as PopulationStats[]) || []
+  if (previousPopulation.length > 0) {
+    populationStats = calculatePopulationStats(previousPopulation, updatedNodes)
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { populationStats: populationStats as unknown as Prisma.InputJsonValue },
     })
   }
 
@@ -293,8 +404,11 @@ async function generateAndStoreTick(
       content: m.content, reach: m.reach, sentiment: m.sentiment,
     })),
     nodes: updatedNodes,
+    edges: updatedEdges,
     healthScores,
     decisionPrompt: tickData.decisionPrompt,
+    executiveRecommendations,
+    populationStats,
   }
 }
 
@@ -426,8 +540,8 @@ export async function runTick(
     if (cachedTick) {
       console.log(`[step] Cache HIT: day=${next.dayNumber} tick=${next.tickIndex}`)
 
-      // Read graph + health + decision in parallel, update cursor
-      const [graphData, updateTick, dp] = await Promise.all([
+      // Read graph + health + decision + project in parallel, update cursor
+      const [graphData, updateTick, dp, proj] = await Promise.all([
         getProjectGraph(projectId),
         prisma.tick.findUnique({
           where: {
@@ -455,8 +569,25 @@ export async function runTick(
             regulatoryPressure: storedHealth.regulatoryPressure,
             internalStability: storedHealth.internalStability,
             fraudRisk: storedHealth.fraudRisk,
+            publicAwareness: storedHealth.publicAwareness ?? 10,
           }
         : calculateHealthScoresFromNodes(graphData.nodes)
+
+      // If a decision was already made today, skip the cached EOD decision
+      let effectiveDp = dp
+      if (dp) {
+        const todaysDecision = await prisma.decisionPoint.findFirst({
+          where: {
+            projectId,
+            chosenOption: { not: null },
+            tick: { dayNumber: next.dayNumber },
+          },
+        })
+        if (todaysDecision) {
+          console.log(`[step] Skipping cached EOD decision — already decided today (day ${next.dayNumber})`)
+          effectiveDp = null
+        }
+      }
 
       // Trigger background pre-generation
       setTimeout(() => {
@@ -470,8 +601,15 @@ export async function runTick(
           content: m.content, reach: m.reach, sentiment: m.sentiment,
         })),
         nodes: graphData.nodes,
+        edges: graphData.edges,
         healthScores,
-        decisionPrompt: dp ? { prompt: dp.prompt, options: dp.options as string[] } : undefined,
+        decisionPrompt: effectiveDp ? { prompt: effectiveDp.prompt, options: effectiveDp.options as string[] } : undefined,
+        executiveRecommendations: effectiveDp?.executiveRecommendations
+          ? (effectiveDp.executiveRecommendations as unknown as ExecutiveRecommendation[])
+          : undefined,
+        populationStats: proj.populationStats
+          ? (proj.populationStats as unknown as PopulationStats[])
+          : undefined,
       }
     }
   }

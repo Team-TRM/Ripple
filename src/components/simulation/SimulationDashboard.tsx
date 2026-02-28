@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useCallback, useRef } from 'react'
+import { useEffect, useCallback, useRef, useState } from 'react'
 import {
   SimulationProvider,
   useSimulation,
@@ -9,6 +9,8 @@ import {
   type GraphEdge,
   type HealthScores,
   type TimelineEvent,
+  type SimMessage,
+  type ExecutiveRecommendation,
 } from './SimulationContext'
 import TopBar from './TopBar'
 import MetricsSidebar from './MetricsSidebar'
@@ -17,6 +19,7 @@ import TimelineBar from './TimelineBar'
 import GraphVisualization from './GraphVisualization'
 import DecisionDialog from './DecisionDialog'
 import NodeDetailDialog from './NodeDetailDialog'
+import SimulationReport from './SimulationReport'
 
 type Project = {
   id: string
@@ -27,19 +30,135 @@ type Project = {
 }
 
 // Tick interval in ms — how long each tick stays on screen
-const TICK_DISPLAY_INTERVAL = 4000
+const TICK_DISPLAY_INTERVAL = 1500
+
+const SIMULATING_TIPS = [
+  'Scanning media channels',
+  'Analyzing stakeholder reactions',
+  'Modeling public sentiment',
+  'Evaluating regulatory signals',
+  'Processing social media activity',
+  'Assessing crisis trajectory',
+  'Computing reputational impact',
+  'Monitoring internal communications',
+]
+
+function SimulatingOverlay() {
+  const [tipIdx, setTipIdx] = useState(() => Math.floor(Math.random() * SIMULATING_TIPS.length))
+  const [fade, setFade] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFade(false)
+      setTimeout(() => {
+        setTipIdx((i) => (i + 1) % SIMULATING_TIPS.length)
+        setFade(true)
+      }, 400)
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="absolute inset-0 z-30 bg-black/30 pointer-events-none flex items-end justify-center pb-8">
+      <div className="flex items-center gap-3 px-5 py-2.5 rounded-full bg-black/60 backdrop-blur-sm border border-gray-700/40">
+        <span className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_6px_rgba(239,68,68,0.6)] animate-pulse" />
+        <span
+          className="text-xs text-gray-400 font-medium tracking-wide transition-opacity duration-400"
+          style={{ opacity: fade ? 1 : 0 }}
+        >
+          {SIMULATING_TIPS[tipIdx]}
+        </span>
+      </div>
+    </div>
+  )
+}
 
 function DashboardInner({ projectId }: { projectId: string }) {
-  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex } = useSimulation()
+  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex, isGenerating, simulationDays } = useSimulation()
   const dispatch = useSimulationDispatch()
   const playingRef = useRef(false)
   const steppingRef = useRef(false)
   const positionRef = useRef({ day: currentDay, tickIndex: currentTickIndex })
+  const abortRef = useRef<AbortController | null>(null)
 
+  // Server-side position — tracks where the server is, independent of displayed state
+  const fetchPositionRef = useRef({ day: currentDay, tickIndex: currentTickIndex })
+
+  // Deferred tick advance — dispatched by the play loop after messages drain
+  const pendingTickRef = useRef<{
+    dayNumber: number
+    tickIndex: number
+    subTickIndex: number
+  } | null>(null)
+
+  // Message queue — decoupled from fetch so messages keep flowing during LLM calls
+  const messageQueueRef = useRef<SimMessage[]>([])
+  const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Accumulated user events — survives fetch aborts
+  const pendingEventsRef = useRef<string[]>([])
+
+  // Wake function to interrupt the play loop sleep for immediate retry
+  const wakeRef = useRef<(() => void) | null>(null)
+
+  // Decision deferred until messages drain — stored here by stepOnce, shown by play loop
+  const pendingDecisionRef = useRef<{
+    prompt: string
+    options: string[]
+    executiveRecommendations?: ExecutiveRecommendation[]
+  } | null>(null)
+
+  const simulationDaysRef = useRef(simulationDays)
   playingRef.current = isPlaying
   positionRef.current = { day: currentDay, tickIndex: currentTickIndex }
+  simulationDaysRef.current = simulationDays
 
-  // Load initial graph data + trigger pre-generation on mount
+  // Accumulate user events into ref (survives fetch aborts).
+  // Abort in-flight fetch, flush old messages, and wake the play loop for immediate retry.
+  useEffect(() => {
+    if (!pendingUserEvent) return
+    pendingEventsRef.current.push(pendingUserEvent)
+    dispatch({ type: 'SET_PENDING_USER_EVENT', event: null })
+
+    // Abort in-flight fetch so we can immediately retry with the new event
+    if (abortRef.current) {
+      console.log('[step] Aborting in-flight step for user input')
+      abortRef.current.abort()
+    }
+    steppingRef.current = false
+
+    // Clear old message queue so new breaking news isn't stuck behind stale messages
+    if (drainTimerRef.current) {
+      clearTimeout(drainTimerRef.current)
+      drainTimerRef.current = null
+    }
+    messageQueueRef.current.length = 0
+
+    // Wake the play loop sleep to trigger immediate step
+    if (wakeRef.current) {
+      wakeRef.current()
+      wakeRef.current = null
+    }
+  }, [pendingUserEvent, dispatch])
+
+  // Drain message queue one by one with staggered timing (runs independently of fetches)
+  const drainMessages = useCallback(() => {
+    if (drainTimerRef.current) return // already draining
+
+    const drainNext = () => {
+      if (messageQueueRef.current.length === 0 || !playingRef.current) {
+        drainTimerRef.current = null
+        return
+      }
+      const msg = messageQueueRef.current.shift()!
+      dispatch({ type: 'ADD_MESSAGES', messages: [msg] })
+      const delay = 800 + Math.random() * 700
+      drainTimerRef.current = setTimeout(drainNext, delay)
+    }
+    drainNext()
+  }, [dispatch])
+
+  // Load initial graph data + auto-play on mount
   useEffect(() => {
     const init = async () => {
       try {
@@ -56,47 +175,74 @@ function DashboardInner({ projectId }: { projectId: string }) {
 
       // Kick off pre-generation in background
       fetch(`/api/projects/${projectId}/generate-ahead`, { method: 'POST' }).catch(() => {})
+
+      // Auto-play after graph loads
+      dispatch({ type: 'SET_PLAYING', isPlaying: true })
     }
     init()
   }, [projectId, dispatch])
 
-  // Consume next tick from server (returns from cache if pre-generated = instant)
+  // Fetch next tick — non-blocking (messages pushed to queue, not staggered inline)
   const stepOnce = useCallback(async () => {
     if (steppingRef.current) return
     steppingRef.current = true
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    dispatch({ type: 'SET_GENERATING', isGenerating: true })
+
+    // Snapshot events but DON'T clear yet — if fetch aborts, events survive for retry
+    const eventSnapshot = [...pendingEventsRef.current]
+    const combinedEvent = eventSnapshot.length > 0 ? eventSnapshot.join('\n\nALSO: ') : undefined
+
     try {
       const bodyPayload: Record<string, string | number> = {
-        fromDay: positionRef.current.day,
-        fromTickIndex: positionRef.current.tickIndex,
+        fromDay: fetchPositionRef.current.day,
+        fromTickIndex: fetchPositionRef.current.tickIndex,
       }
-      if (pendingUserEvent) {
-        bodyPayload.userEvent = pendingUserEvent
-        dispatch({ type: 'SET_PENDING_USER_EVENT', event: null })
+      if (combinedEvent) {
+        bodyPayload.userEvent = combinedEvent
       }
 
       const res = await fetch(`/api/projects/${projectId}/step`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyPayload),
+        signal: controller.signal,
       })
 
       const data = await res.json()
 
       if (!res.ok) {
+        // Don't clear events on error — they weren't processed by the server
         if (data.decision) {
           dispatch({
             type: 'SHOW_DECISION',
             prompt: data.decision.prompt,
             options: data.decision.options,
+            executiveRecommendations: data.decision.executiveRecommendations
+              ? (Array.isArray(data.decision.executiveRecommendations) ? data.decision.executiveRecommendations : undefined)
+              : undefined,
           })
         } else {
           console.error(`[step] Error: ${data.error}`)
-          dispatch({ type: 'SET_PLAYING', isPlaying: false })
         }
+        dispatch({ type: 'SET_PLAYING', isPlaying: false })
         return
       }
 
-      // If paused during fetch, silently update position but skip visual updates
+      // Success — clear the events we just sent (new events added since snapshot stay)
+      if (eventSnapshot.length > 0) {
+        pendingEventsRef.current.splice(0, eventSnapshot.length)
+      }
+
+      // Update server-side position immediately so next fetch knows where to continue
+      if (data.tick) {
+        fetchPositionRef.current = { day: data.tick.dayNumber, tickIndex: data.tick.tickIndex }
+      }
+
+      // If paused during fetch, advance display position immediately and skip visual updates
       if (!playingRef.current) {
         if (data.tick) {
           dispatch({
@@ -109,74 +255,169 @@ function DashboardInner({ projectId }: { projectId: string }) {
         return
       }
 
+      // API responded — hide simulating overlay immediately
+      dispatch({ type: 'SET_GENERATING', isGenerating: false })
+
       // Update graph + health immediately
       if (data.nodes) {
-        dispatch({ type: 'UPDATE_NODES', nodes: data.nodes })
+        dispatch({ type: 'UPDATE_NODES', nodes: data.nodes, edges: data.edges })
       }
       if (data.healthScores) {
         dispatch({ type: 'SET_HEALTH', scores: data.healthScores })
       }
 
-      // Stagger messages one-by-one for smooth reveal
+      // Push messages to queue — drain loop displays them one by one independently
+      // Truncate old undisplayed messages to max 3 so events stay in sync with the day counter
       if (data.messages?.length) {
+        if (messageQueueRef.current.length > 3) {
+          messageQueueRef.current.length = 3
+        }
         const TICK_LABELS = ['Morning', 'Afternoon', 'Evening']
         const enrichedMessages = data.messages.map((m: Record<string, unknown>) => ({
           ...m,
           dayNumber: data.tick?.dayNumber ?? 0,
           tickIndex: data.tick?.tickIndex ?? 0,
-          timestamp: `Day ${data.tick?.dayNumber ?? 0} · ${TICK_LABELS[data.tick?.tickIndex ?? 0] || 'Morning'}`,
+          timestamp: `Day ${(data.tick?.dayNumber ?? 0) + 1} · ${TICK_LABELS[data.tick?.tickIndex ?? 0] || 'Morning'}`,
         }))
-        // Reveal messages one at a time with random 3-5s delay
-        for (let i = 0; i < enrichedMessages.length; i++) {
-          if (i > 0) {
-            const delay = 3000 + Math.random() * 2000
-            await new Promise((r) => setTimeout(r, delay))
-          }
-          if (!playingRef.current) break
-          dispatch({ type: 'ADD_MESSAGES', messages: [enrichedMessages[i]] })
-        }
+        messageQueueRef.current.push(...enrichedMessages)
+        drainMessages()
       }
 
+      // Defer tick advance — play loop will dispatch after messages drain
       if (data.tick) {
-        dispatch({
-          type: 'ADVANCE_TICK',
+        pendingTickRef.current = {
           dayNumber: data.tick.dayNumber,
           tickIndex: data.tick.tickIndex,
           subTickIndex: data.tick.subTickIndex,
-        })
+        }
       }
+      if (data.populationStats) {
+        dispatch({ type: 'SET_POPULATION_STATS', stats: data.populationStats })
+      }
+      // Defer decision until message queue drains — play loop will show it
       if (data.decisionPrompt) {
-        dispatch({
-          type: 'SHOW_DECISION',
+        pendingDecisionRef.current = {
           prompt: data.decisionPrompt.prompt,
           options: data.decisionPrompt.options,
-        })
+          executiveRecommendations: data.executiveRecommendations,
+        }
       }
       if (data.injectedEvent) {
         dispatch({ type: 'ADD_TIMELINE_EVENT', event: data.injectedEvent })
       }
     } catch (err) {
+      // AbortError = user input interrupted — events stay in ref for automatic retry
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        console.log('[step] Aborted — will retry with accumulated events')
+        return
+      }
       console.error('[step] Failed:', err)
       dispatch({ type: 'SET_PLAYING', isPlaying: false })
     } finally {
       steppingRef.current = false
+      abortRef.current = null
+      dispatch({ type: 'SET_GENERATING', isGenerating: false })
     }
-  }, [projectId, dispatch, pendingUserEvent])
+  }, [projectId, dispatch, drainMessages])
 
-  // Play loop — steady-pace interval for game-like feel
+  // Trigger end-of-simulation report
+  const triggerReport = useCallback(async () => {
+    dispatch({ type: 'SET_PLAYING', isPlaying: false })
+    dispatch({ type: 'SET_LOADING_REPORT', loading: true })
+    try {
+      const res = await fetch(`/api/projects/${projectId}/report`, { method: 'POST' })
+      if (res.ok) {
+        const report = await res.json()
+        dispatch({ type: 'SHOW_REPORT', report })
+      }
+    } catch (err) {
+      console.error('Failed to generate report:', err)
+    } finally {
+      dispatch({ type: 'SET_LOADING_REPORT', loading: false })
+    }
+  }, [projectId, dispatch])
+
+  // Play loop — steady-pace with interruptible sleep
+  // stepOnce is non-blocking (messages drain independently), so the loop is fast
   useEffect(() => {
     if (!isPlaying) return
     let cancelled = false
+
+    const interruptibleSleep = (ms: number): Promise<void> => {
+      return new Promise(resolve => {
+        const timer = setTimeout(() => {
+          wakeRef.current = null
+          resolve()
+        }, ms)
+        wakeRef.current = () => {
+          clearTimeout(timer)
+          wakeRef.current = null
+          resolve()
+        }
+      })
+    }
 
     const loop = async () => {
       while (playingRef.current && !cancelled) {
         const t0 = Date.now()
         await stepOnce()
-        // Maintain steady tick rhythm regardless of server response time
+
+        // Wait for message queue to mostly drain before advancing the displayed day
+        while (messageQueueRef.current.length > 2 && playingRef.current && !cancelled) {
+          if (pendingEventsRef.current.length > 0) break // user input takes priority
+          await new Promise(r => setTimeout(r, 200))
+        }
+
+        // Advance displayed tick AFTER messages drain — keeps TopBar in sync with events
+        if (pendingTickRef.current && !cancelled) {
+          const tick = pendingTickRef.current
+          pendingTickRef.current = null
+          dispatch({
+            type: 'ADVANCE_TICK',
+            dayNumber: tick.dayNumber,
+            tickIndex: tick.tickIndex,
+            subTickIndex: tick.subTickIndex,
+          })
+        }
+
+        // Check if simulation is complete (past last day)
+        const simDays = simulationDaysRef.current
+        const fetchPos = fetchPositionRef.current
+        if (fetchPos.day >= simDays && !cancelled) {
+          // Wait for ALL messages to drain, then show report
+          while (messageQueueRef.current.length > 0 && !cancelled) {
+            await new Promise(r => setTimeout(r, 200))
+          }
+          if (!cancelled) {
+            triggerReport()
+          }
+          break
+        }
+
+        // If a decision came in, wait for queue to FULLY drain, then show it
+        if (pendingDecisionRef.current) {
+          while (messageQueueRef.current.length > 0 && !cancelled) {
+            await new Promise(r => setTimeout(r, 200))
+          }
+          if (!cancelled) {
+            const dec = pendingDecisionRef.current
+            pendingDecisionRef.current = null
+            dispatch({ type: 'SET_PLAYING', isPlaying: false })
+            dispatch({
+              type: 'SHOW_DECISION',
+              prompt: dec.prompt,
+              options: dec.options,
+              executiveRecommendations: dec.executiveRecommendations,
+            })
+          }
+          break // exit loop — play was stopped
+        }
+
         const elapsed = Date.now() - t0
         const remaining = Math.max(200, TICK_DISPLAY_INTERVAL - elapsed)
-        if (playingRef.current && !cancelled) {
-          await new Promise((r) => setTimeout(r, remaining))
+        // Skip sleep if pending events need immediate processing
+        if (playingRef.current && !cancelled && pendingEventsRef.current.length === 0) {
+          await interruptibleSleep(remaining)
         }
       }
     }
@@ -184,8 +425,21 @@ function DashboardInner({ projectId }: { projectId: string }) {
 
     return () => {
       cancelled = true
+      if (wakeRef.current) {
+        wakeRef.current()
+        wakeRef.current = null
+      }
     }
-  }, [isPlaying, stepOnce])
+  }, [isPlaying, stepOnce, triggerReport])
+
+  // Clean up drain timer on unmount
+  useEffect(() => {
+    return () => {
+      if (drainTimerRef.current) {
+        clearTimeout(drainTimerRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div className="h-screen w-screen flex flex-col bg-black text-white overflow-hidden">
@@ -195,11 +449,13 @@ function DashboardInner({ projectId }: { projectId: string }) {
         <div className="flex-1 relative">
           <GraphVisualization />
           <NodeDetailDialog />
+          {isGenerating && <SimulatingOverlay />}
         </div>
         <MetricsSidebar />
       </div>
       <TimelineBar />
       <DecisionDialog projectId={projectId} />
+      <SimulationReport />
     </div>
   )
 }
@@ -230,12 +486,13 @@ export default function SimulationDashboard({
         nodes: initialNodes || [],
         edges: initialEdges || [],
         healthScores: initialHealth || {
-          overall: 50,
-          publicSentiment: 50,
-          mediaHeat: 30,
-          regulatoryPressure: 20,
-          internalStability: 70,
-          fraudRisk: 15,
+          overall: 75,
+          publicSentiment: 70,
+          mediaHeat: 15,
+          regulatoryPressure: 10,
+          internalStability: 80,
+          fraudRisk: 10,
+          publicAwareness: 5,
         },
       }}
       initialTimelineEvents={initialTimelineEvents}
