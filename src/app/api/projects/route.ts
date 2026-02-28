@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
-import { generateQuestions } from '@/lib/ai/generate-questions'
+import { generateQuestions } from '@/lib/setup/generate-questions'
 
 // GET /api/projects — list all projects
 export async function GET() {

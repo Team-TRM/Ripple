@@ -1,16 +1,17 @@
 import { prisma } from '@/lib/db/prisma'
 import { Prisma } from '@/generated/prisma/client'
-import { generateEnhancedTick } from '@/lib/ai/generate-enhanced-tick'
-import { generateExecutiveAdvice } from '@/lib/ai/generate-executive-advice'
+import { generateEnhancedTick } from '@/lib/agents/orchestrator/tick-orchestrator'
+import { generateExecutiveAdvice } from '@/lib/agents/executives/advisory/generate-advice'
 import {
   getProjectGraph,
   processTickUpdates,
   saveStateSnapshots,
   calculateHealthScores,
   calculateHealthScoresFromNodes,
-} from './neo4j-graph'
-import { calculatePopulationStats } from './population-engine'
-import type { GraphNode, GraphEdge } from './neo4j-graph'
+} from '@/lib/simulation/engine/graph-engine'
+import { calculatePopulationStats } from '@/lib/agents/cohorts/population/population-dynamics'
+import { getSpeakerMemory } from '@/lib/agents/speakers/memory/recall'
+import type { GraphNode, GraphEdge } from '@/lib/types'
 import type { SpeakerProfile, ExecutiveRecommendation, PopulationStats } from '@/lib/ai/schemas'
 
 export type TickResult = {
@@ -47,9 +48,6 @@ export type TickResult = {
   executiveRecommendations?: ExecutiveRecommendation[]
   populationStats?: PopulationStats[]
 }
-
-// Track in-flight generation per project to prevent duplicates
-const generatingProjects = new Set<string>()
 
 function getNextTickIndex(currentTickIndex: number, currentDay: number) {
   if (currentTickIndex < 2) {
@@ -89,8 +87,14 @@ async function generateAndStoreTick(
 
   if (!project) throw new Error('Project not found')
 
-  // Load speaker profiles from project
+  // Load speaker profiles and retrieve per-speaker memory
   const speakerProfiles = (project.speakerProfiles as unknown as SpeakerProfile[]) || []
+  const speakerMemory = speakerProfiles.length > 0
+    ? await getSpeakerMemory(projectId, speakerProfiles)
+    : new Map()
+
+  // Load previous population stats for feedback loop
+  const previousPopulation = (project.populationStats as unknown as PopulationStats[]) || []
 
   const lastTick = project.ticks[0]
   const graphData = await getProjectGraph(projectId)
@@ -124,6 +128,16 @@ async function generateAndStoreTick(
     )
     if (crisisMessages.length > 0) {
       breakingDevelopments = crisisMessages.map((m) => `${m.author}: ${m.content.slice(0, 150)}`)
+    }
+
+    // Also load user-injected crises from today
+    const injectedCrises = await prisma.timelineEvent.findMany({
+      where: { projectId, dayNumber, isUserInjected: true },
+      orderBy: { id: 'asc' },
+    })
+    if (injectedCrises.length > 0) {
+      const crisisTexts = injectedCrises.map((e) => `INJECTED CRISIS: ${e.description}`)
+      breakingDevelopments = [...(breakingDevelopments || []), ...crisisTexts]
     }
   } else {
     recentMessages = lastTick?.messages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`) || []
@@ -170,8 +184,10 @@ async function generateAndStoreTick(
     healthScores: currentHealth,
     userEvent,
     speakerProfiles: speakerProfiles.length > 0 ? speakerProfiles : undefined,
+    speakerMemory: speakerMemory.size > 0 ? speakerMemory : undefined,
     nodeLabels: graphData.nodes.map((n) => n.label),
     breakingDevelopments,
+    populationStats: previousPopulation.length > 0 ? previousPopulation : undefined,
   })
 
   // Apply all graph mutations in one read-modify-write cycle
@@ -243,8 +259,7 @@ async function generateAndStoreTick(
     }
   }
 
-  // Store generate tick with messages and summaries
-  // Wrap in try-catch to handle race condition with pre-gen creating the same tick
+  // Store tick with messages and summaries
   let generateTick
   try {
     generateTick = await prisma.tick.create({
@@ -276,9 +291,9 @@ async function generateAndStoreTick(
       include: { messages: true },
     })
   } catch (err: unknown) {
-    // Unique constraint violation — pre-gen created this tick concurrently
+    // Unique constraint violation — tick already exists
     if (err && typeof err === 'object' && 'code' in err && err.code === 'P2002') {
-      console.log(`[tick-engine] Tick already exists (concurrent pre-gen), returning existing`)
+      console.log(`[tick-engine] Tick already exists, returning existing`)
       const fallback = await prisma.tick.findUnique({
         where: {
           projectId_dayNumber_tickIndex_subTickIndex: { projectId, dayNumber, tickIndex, subTickIndex: 0 },
@@ -301,7 +316,7 @@ async function generateAndStoreTick(
     throw err
   }
 
-  // Store observe + update sub-ticks (skipDuplicates for race condition with pre-gen)
+  // Store observe + update sub-ticks
   await prisma.tick.createMany({
     data: [
       { projectId, dayNumber, tickIndex, subTickIndex: 1, dateLabel },
@@ -399,9 +414,8 @@ async function generateAndStoreTick(
     })
   }
 
-  // Compute population stats
+  // Compute population stats using the population loaded earlier
   let populationStats: PopulationStats[] | undefined
-  const previousPopulation = (project.populationStats as unknown as PopulationStats[]) || []
   if (previousPopulation.length > 0) {
     populationStats = calculatePopulationStats(previousPopulation, updatedNodes)
     await prisma.project.update({
@@ -426,91 +440,8 @@ async function generateAndStoreTick(
 }
 
 /**
- * Pre-generate ticks ahead of the current playback position.
- * Runs in background. Generates up to `count` ticks ahead.
- */
-export async function preGenerateTicks(projectId: string, count: number = 6): Promise<void> {
-  if (generatingProjects.has(projectId)) {
-    console.log(`[pre-gen] Already generating for ${projectId}, skipping`)
-    return
-  }
-  generatingProjects.add(projectId)
-
-  try {
-    for (let i = 0; i < count; i++) {
-      // Stop if pending decision
-      const pendingDecision = await prisma.decisionPoint.findFirst({
-        where: { projectId, chosenOption: null },
-      })
-      if (pendingDecision) {
-        console.log(`[pre-gen] Stopping — pending decision`)
-        break
-      }
-
-      // Find last generated tick
-      const lastTick = await prisma.tick.findFirst({
-        where: { projectId },
-        orderBy: [{ dayNumber: 'desc' }, { tickIndex: 'desc' }, { subTickIndex: 'desc' }],
-      })
-      if (!lastTick) break
-
-      const next = getNextTickIndex(lastTick.tickIndex, lastTick.dayNumber)
-
-      // Skip if already generated
-      const exists = await prisma.tick.findUnique({
-        where: {
-          projectId_dayNumber_tickIndex_subTickIndex: {
-            projectId, dayNumber: next.dayNumber, tickIndex: next.tickIndex, subTickIndex: 0,
-          },
-        },
-      })
-      if (exists) continue
-
-      console.log(`[pre-gen] Generating ahead: day=${next.dayNumber} tick=${next.tickIndex}`)
-      await generateAndStoreTick(projectId, next.dayNumber, next.tickIndex)
-    }
-  } catch (err) {
-    console.error('[pre-gen] Error:', err)
-  } finally {
-    generatingProjects.delete(projectId)
-  }
-}
-
-/**
- * Invalidate pre-generated ticks at and beyond a given position.
- * Called when user injects an event to clear stale future content.
- */
-async function invalidateFutureTicks(
-  projectId: string,
-  fromDay: number,
-  fromTickIndex: number,
-): Promise<void> {
-  // Find all ticks beyond the current playback position
-  const ticksToDelete = await prisma.tick.findMany({
-    where: {
-      projectId,
-      OR: [
-        { dayNumber: { gt: fromDay } },
-        { dayNumber: fromDay, tickIndex: { gte: fromTickIndex } },
-      ],
-    },
-    select: { id: true },
-  })
-
-  if (ticksToDelete.length === 0) return
-
-  // Cascade deletes messages, summaries, health scores, decision points
-  await prisma.tick.deleteMany({
-    where: { id: { in: ticksToDelete.map((t) => t.id) } },
-  })
-
-  console.log(`[tick-engine] Invalidated ${ticksToDelete.length} future ticks for user event injection`)
-}
-
-/**
- * runTick — consumes the next tick. Uses client-provided playback position to
- * compute next tick. Returns from cache if pre-generated (instant),
- * otherwise generates on-demand. Triggers background pre-generation after.
+ * runTick — generates the next tick on-demand. Strictly linear: every tick
+ * is freshly generated, no caching or pre-generation.
  */
 export async function runTick(
   projectId: string,
@@ -534,101 +465,7 @@ export async function runTick(
     next = getNextTickIndex(lastTick.tickIndex, lastTick.dayNumber)
   }
 
-  // If user event, invalidate all pre-generated ticks at and beyond this position
-  if (userEvent) {
-    await invalidateFutureTicks(projectId, next.dayNumber, next.tickIndex)
-  }
-
-  // Check if already pre-generated (and no user event to inject)
-  if (!userEvent) {
-    const cachedTick = await prisma.tick.findUnique({
-      where: {
-        projectId_dayNumber_tickIndex_subTickIndex: {
-          projectId, dayNumber: next.dayNumber, tickIndex: next.tickIndex, subTickIndex: 0,
-        },
-      },
-      include: { messages: true },
-    })
-
-    if (cachedTick) {
-      console.log(`[step] Cache HIT: day=${next.dayNumber} tick=${next.tickIndex}`)
-
-      // Read graph + health + decision + project in parallel, update cursor
-      const [graphData, updateTick, dp, proj] = await Promise.all([
-        getProjectGraph(projectId),
-        prisma.tick.findUnique({
-          where: {
-            projectId_dayNumber_tickIndex_subTickIndex: {
-              projectId, dayNumber: next.dayNumber, tickIndex: next.tickIndex, subTickIndex: 2,
-            },
-          },
-          include: { healthScore: true },
-        }),
-        prisma.decisionPoint.findFirst({
-          where: { tickId: cachedTick.id, chosenOption: null },
-        }),
-        prisma.project.update({
-          where: { id: projectId },
-          data: { currentDay: next.dayNumber },
-        }),
-      ])
-
-      const storedHealth = updateTick?.healthScore
-      const healthScores = storedHealth
-        ? {
-            overall: storedHealth.overall,
-            publicSentiment: storedHealth.publicSentiment,
-            mediaHeat: storedHealth.mediaHeat,
-            regulatoryPressure: storedHealth.regulatoryPressure,
-            internalStability: storedHealth.internalStability,
-            fraudRisk: storedHealth.fraudRisk,
-            publicAwareness: storedHealth.publicAwareness ?? 10,
-          }
-        : calculateHealthScoresFromNodes(graphData.nodes)
-
-      // If a decision was already made today, skip the cached EOD decision
-      let effectiveDp = dp
-      if (dp) {
-        const todaysDecision = await prisma.decisionPoint.findFirst({
-          where: {
-            projectId,
-            chosenOption: { not: null },
-            tick: { dayNumber: next.dayNumber },
-          },
-        })
-        if (todaysDecision) {
-          console.log(`[step] Skipping cached EOD decision — already decided today (day ${next.dayNumber})`)
-          effectiveDp = null
-        }
-      }
-
-      // Trigger background pre-generation
-      setTimeout(() => {
-        preGenerateTicks(projectId, 6).catch(console.error)
-      }, 50)
-
-      return {
-        tick: { id: cachedTick.id, dayNumber: next.dayNumber, tickIndex: next.tickIndex, subTickIndex: 2 },
-        messages: cachedTick.messages.map((m) => ({
-          id: m.id, type: m.type, author: m.author,
-          content: m.content, reach: m.reach, sentiment: m.sentiment,
-        })),
-        nodes: graphData.nodes,
-        edges: graphData.edges,
-        healthScores,
-        decisionPrompt: effectiveDp ? { prompt: effectiveDp.prompt, options: effectiveDp.options as string[] } : undefined,
-        executiveRecommendations: effectiveDp?.executiveRecommendations
-          ? (effectiveDp.executiveRecommendations as unknown as ExecutiveRecommendation[])
-          : undefined,
-        populationStats: proj.populationStats
-          ? (proj.populationStats as unknown as PopulationStats[])
-          : undefined,
-      }
-    }
-  }
-
-  // Cache miss or user event — generate on-demand
-  console.log(`[step] ${userEvent ? 'USER EVENT' : 'Cache MISS'}: generating day=${next.dayNumber} tick=${next.tickIndex}`)
+  console.log(`[step] Generating day=${next.dayNumber} tick=${next.tickIndex}${userEvent ? ' (USER EVENT)' : ''}`)
   const result = await generateAndStoreTick(projectId, next.dayNumber, next.tickIndex, decision, userEvent)
 
   // Update project cursor
@@ -636,11 +473,6 @@ export async function runTick(
     where: { id: projectId },
     data: { currentDay: next.dayNumber },
   })
-
-  // Trigger background pre-generation
-  setTimeout(() => {
-    preGenerateTicks(projectId, 6).catch(console.error)
-  }, 50)
 
   return result
 }

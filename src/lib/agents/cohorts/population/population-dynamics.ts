@@ -1,4 +1,4 @@
-import type { GraphNode } from './neo4j-graph'
+import type { GraphNode } from '@/lib/types'
 import type { PopulationStats } from '@/lib/ai/schemas'
 
 const POPULATION_RANGES: Record<string, [number, number]> = {

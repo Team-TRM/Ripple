@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
 import { Prisma } from '@/generated/prisma/client'
-import { generateTick } from '@/lib/ai/generate-tick'
-import { generateGraph } from '@/lib/ai/generate-graph'
-import { generateSpeakerProfiles } from '@/lib/ai/generate-speakers'
-import { createProjectGraph, deleteProjectGraph, getProjectGraph } from '@/lib/simulation/neo4j-graph'
-import { initializePopulationStats } from '@/lib/simulation/population-engine'
+import { generateTick } from '@/lib/agents/orchestrator/initial-tick'
+import { generateGraph } from '@/lib/setup/generate-graph'
+import { generateSpeakerProfiles } from '@/lib/agents/speakers/profiles/generate-profiles'
+import { createProjectGraph, deleteProjectGraph, getProjectGraph } from '@/lib/simulation/engine/graph-engine'
+import { initializePopulationStats } from '@/lib/agents/cohorts/population/population-dynamics'
 
 type EditedCohort = { id: string; name: string; description: string }
 type EditedEvent = { id: string; title: string; description: string }

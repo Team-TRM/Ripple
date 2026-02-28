@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
-import { getProjectGraph, calculateHealthScores } from '@/lib/simulation/neo4j-graph'
+import { getProjectGraph, calculateHealthScores } from '@/lib/simulation/engine/graph-engine'
 
 // GET /api/projects/[id]/graph — returns full graph state for dashboard
 export async function GET(

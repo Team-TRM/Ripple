@@ -1,5 +1,5 @@
-import { mistral } from './client'
-import { GraphSetupSchema, type GraphSetup } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { GraphSetupSchema, type GraphSetup } from '@/lib/ai/schemas'
 
 const SYSTEM_PROMPT = `You are a crisis simulation graph architect. Given a crisis context and audience cohorts, generate an influence graph that models how different actors interact during this crisis.
 

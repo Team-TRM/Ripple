@@ -1,4 +1,4 @@
-import { mistral } from './client'
+import { mistral } from '@/lib/ai/client'
 
 const SYSTEM_PROMPT = `You are a crisis simulation analyst. Given a crisis description and the user's answers to clarifying questions, write a concise factual summary of the crisis situation.
 

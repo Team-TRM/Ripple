@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
-import { runTick } from '@/lib/simulation/tick-engine'
+import { runTick } from '@/lib/simulation/engine/tick-engine'
 
 // POST /api/projects/[id]/step — advance one sub-tick
 export async function POST(
@@ -37,16 +37,18 @@ export async function POST(
   }
 
   try {
-    // If user injected an event, store it as a timeline event
+    // If user injected an event, persist it as a timeline event in DB
     let injectedEvent = null
     if (userEvent) {
-      injectedEvent = {
-        id: `user-${Date.now()}`,
-        dayNumber: fromDay ?? project.currentDay,
-        title: 'Crisis Update',
-        description: userEvent,
-        isUserInjected: true,
-      }
+      injectedEvent = await prisma.timelineEvent.create({
+        data: {
+          projectId: id,
+          dayNumber: fromDay ?? project.currentDay,
+          title: 'Crisis Injection',
+          description: userEvent,
+          isUserInjected: true,
+        },
+      })
     }
 
     const result = await runTick(id, decision, userEvent, fromDay, fromTickIndex)

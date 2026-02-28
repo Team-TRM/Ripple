@@ -1,5 +1,8 @@
-import { mistral } from './client'
-import { EnhancedTickResponseSchema, type EnhancedTickResponse, type SpeakerProfile } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { EnhancedTickResponseSchema, type EnhancedTickResponse, type SpeakerProfile, type PopulationStats } from '@/lib/ai/schemas'
+import type { AgentMemoryEntry } from '@/lib/agents/core/types'
+import { buildSpeakerContextBlock } from '@/lib/agents/speakers/behavior/narrative-arc'
+import { formatSpeakerMemoryBlock } from '@/lib/agents/speakers/memory/recall'
 
 const TICK_PERIOD_LABELS = ['Morning', 'Afternoon', 'Evening'] as const
 
@@ -126,8 +129,10 @@ type EnhancedTickInput = {
   healthScores?: { overall: number; publicSentiment: number; mediaHeat: number; regulatoryPressure: number; internalStability: number; fraudRisk: number; publicAwareness: number }
   userEvent?: string
   speakerProfiles?: SpeakerProfile[]
+  speakerMemory?: Map<string, AgentMemoryEntry[]>
   nodeLabels?: string[]
   breakingDevelopments?: string[]
+  populationStats?: PopulationStats[]
 }
 
 export async function generateEnhancedTick(input: EnhancedTickInput): Promise<EnhancedTickResponse> {
@@ -165,8 +170,10 @@ This is a MAJOR breaking event. Your response MUST follow this structure:
 5. healthDeltas should reflect the severity — overallDelta should be negative (-3 to -5), mediaHeatDelta strongly positive (+3 to +5).`
     : ''
 
+  // Use memory-enriched speaker block when memory is available
   const speakerBlock = input.speakerProfiles?.length
-    ? `\nSpeaker agents (use these named individuals for messages — set speakerId to match):\n${input.speakerProfiles.map((s) => `- id="${s.id}" ${s.handle} (${s.cohortName}): ${s.role}. Personality: ${s.personality}. Type: ${s.messageType}, reach: ${s.reach}`).join('\n')}`
+    ? buildSpeakerContextBlock(input.speakerProfiles, input.speakerMemory || new Map())
+      + formatSpeakerMemoryBlock(input.speakerMemory || new Map())
     : ''
 
   const nodeLabelsBlock = input.nodeLabels?.length
@@ -177,6 +184,11 @@ This is a MAJOR breaking event. Your response MUST follow this structure:
     ? `\n**⚠️ TODAY'S BREAKING DEVELOPMENTS** (these are the most critical events that happened today — the evening decision MUST address these):
 ${input.breakingDevelopments.map((d) => `- ${d}`).join('\n')}
 The decisionPrompt MUST be directly about responding to these breaking developments. Do NOT generate a generic daily summary — the CEO needs to decide how to handle THIS specific crisis escalation.`
+    : ''
+
+  const populationBlock = input.populationStats?.length
+    ? `\nPOPULATION ENGAGEMENT (calibrate message intensity based on these):
+${input.populationStats.map((p) => `- ${p.cohortName}: ${p.population} total, ${p.activeSpeakers} active, sentiment=${p.aggregateSentiment.toFixed(2)}, trend=${p.trendDirection}`).join('\n')}`
     : ''
 
   const userPrompt = `Crisis: ${input.crisisContext}
@@ -197,6 +209,7 @@ ${speakerBlock}
 ${nodeLabelsBlock}
 ${userEventBlock}
 ${breakingBlock}
+${populationBlock}
 
 Generate media content and cohort updates for this ${period.toLowerCase()} tick.`
 

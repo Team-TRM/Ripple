@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
-import { generateSummary } from '@/lib/ai/generate-summary'
-import { generateSetup } from '@/lib/ai/generate-setup'
+import { generateSummary } from '@/lib/setup/generate-summary'
+import { generateSetup } from '@/lib/setup/generate-setup'
 
 // POST /api/projects/[id]/answers — submit answers, generate summary + setup, status → "ready"
 export async function POST(

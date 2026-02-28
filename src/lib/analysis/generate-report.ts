@@ -1,4 +1,4 @@
-import { mistral } from './client'
+import { mistral } from '@/lib/ai/client'
 import { z } from 'zod'
 
 const ReportKeyMomentSchema = z.object({
@@ -9,10 +9,20 @@ const ReportKeyMomentSchema = z.object({
   healthImpact: z.number(), // estimated delta to overall health
 })
 
+const EFFECTIVENESS_VALUES = ['excellent', 'good', 'neutral', 'poor', 'harmful'] as const
 const ReportDecisionSchema = z.object({
   day: z.number(),
   decision: z.string(),
-  effectiveness: z.enum(['excellent', 'good', 'neutral', 'poor', 'harmful']),
+  effectiveness: z.string().transform((v) => {
+    const lower = v.toLowerCase()
+    if (EFFECTIVENESS_VALUES.includes(lower as typeof EFFECTIVENESS_VALUES[number])) return lower as typeof EFFECTIVENESS_VALUES[number]
+    // Map common LLM variants to valid values
+    if (lower.includes('excell') || lower === 'great') return 'excellent'
+    if (lower.includes('bad') || lower === 'ineffective') return 'poor'
+    if (lower.includes('harm') || lower === 'damaging' || lower === 'terrible') return 'harmful'
+    if (lower.includes('good') || lower === 'moderate' || lower === 'adequate') return 'good'
+    return 'neutral'
+  }),
   explanation: z.string(),
 })
 

@@ -1,5 +1,5 @@
-import { mistral } from './client'
-import { SpeakerProfilesResponseSchema, type SpeakerProfilesResponse } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { SpeakerProfilesResponseSchema, type SpeakerProfilesResponse } from '@/lib/ai/schemas'
 
 const SYSTEM_PROMPT = `You are generating speaker profiles for a crisis simulation. Create realistic named individuals who will post content during the simulation.
 

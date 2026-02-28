@@ -1,36 +1,10 @@
 'use client'
 
 import { createContext, useContext, useReducer, type ReactNode, type Dispatch } from 'react'
+import type { GraphNode, GraphEdge, HealthScores } from '@/lib/types'
 
-export type GraphNode = {
-  nodeId: string
-  label: string
-  type: string
-  color: string
-  cohortId?: string
-  sentiment: number
-  activation: number
-  trustInCompany: number
-  dominantNarrative?: string
-  behaviours?: string[]
-}
-
-export type GraphEdge = {
-  source: string
-  target: string
-  weight: number
-  type: string
-}
-
-export type HealthScores = {
-  overall: number
-  publicSentiment: number
-  mediaHeat: number
-  regulatoryPressure: number
-  internalStability: number
-  fraudRisk: number
-  publicAwareness: number
-}
+// Re-export shared types for consumer convenience
+export type { GraphNode, GraphEdge, HealthScores }
 
 export type SimMessage = {
   id: string

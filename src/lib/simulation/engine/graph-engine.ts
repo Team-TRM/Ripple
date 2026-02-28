@@ -1,8 +1,14 @@
 import { prisma } from '@/lib/db/prisma'
 import { Prisma } from '@/generated/prisma/client'
 import type { GraphSetup } from '@/lib/ai/schemas'
+import type { GraphNode, GraphEdge, GraphData } from '@/lib/types'
+import { applyInfluencePropagation, applyActivationDecay } from '@/lib/agents/cohorts/influence/propagation'
+import { calculateHealthScoresFromNodes } from '@/lib/simulation/health/health-calculator'
 
-const NODE_COLORS: Record<string, string> = {
+// Re-export shared types for backward compatibility
+export type { GraphNode, GraphEdge, GraphData }
+
+export const NODE_COLORS: Record<string, string> = {
   public: '#DC2626',
   government: '#7C3AED',
   media: '#F59E0B',
@@ -10,31 +16,6 @@ const NODE_COLORS: Record<string, string> = {
   company: '#6366F1',
   influencer: '#EC4899',
   regulator: '#7C3AED',
-}
-
-export type GraphNode = {
-  nodeId: string
-  label: string
-  type: string
-  color: string
-  cohortId?: string
-  sentiment: number
-  activation: number
-  trustInCompany: number
-  dominantNarrative?: string
-  behaviours?: string[]
-}
-
-export type GraphEdge = {
-  source: string
-  target: string
-  weight: number
-  type: string
-}
-
-export type GraphData = {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
 }
 
 function generateId() {
@@ -123,98 +104,9 @@ function applyNodeUpdates(
   }
 }
 
-function applyInfluencePropagation(nodes: GraphNode[], edges: GraphEdge[]): void {
-  const incoming = new Map<string, { source: GraphNode; weight: number }[]>()
-  for (const edge of edges) {
-    const sourceNode = nodes.find((n) => n.nodeId === edge.source)
-    if (!sourceNode || sourceNode.activation <= 0.2) continue
-    if (!incoming.has(edge.target)) incoming.set(edge.target, [])
-    incoming.get(edge.target)!.push({ source: sourceNode, weight: edge.weight })
-  }
-
-  for (const node of nodes) {
-    const influences = incoming.get(node.nodeId)
-    if (!influences || influences.length === 0) continue
-
-    let sentWeightedSum = 0
-    let actWeightedSum = 0
-    let totalWeight = 0
-
-    for (const { source, weight } of influences) {
-      sentWeightedSum += source.sentiment * weight * source.activation
-      actWeightedSum += source.activation * weight
-      totalWeight += weight
-    }
-
-    if (totalWeight === 0) continue
-
-    const influencedSentiment = sentWeightedSum / totalWeight
-    const influencedActivation = actWeightedSum / totalWeight
-
-    const sentDelta = Math.max(-0.15, Math.min(0.15, influencedSentiment - node.sentiment))
-    const actDelta = Math.max(-0.1, Math.min(0.1, influencedActivation - node.activation))
-
-    node.sentiment = Math.max(-1, Math.min(1, node.sentiment + sentDelta))
-    node.activation = Math.max(0, Math.min(1, node.activation + actDelta))
-  }
-}
-
-function applyActivationDecay(nodes: GraphNode[]): void {
-  for (const node of nodes) {
-    node.activation = node.activation * 0.97
-  }
-}
-
-export function calculateHealthScoresFromNodes(nodes: GraphNode[]): {
-  overall: number
-  publicSentiment: number
-  mediaHeat: number
-  regulatoryPressure: number
-  internalStability: number
-  fraudRisk: number
-  publicAwareness: number
-} {
-  if (nodes.length === 0) {
-    return { overall: 50, publicSentiment: 50, mediaHeat: 30, regulatoryPressure: 20, internalStability: 70, fraudRisk: 15, publicAwareness: 10 }
-  }
-
-  const avg = (filtered: number[]) => filtered.length > 0 ? filtered.reduce((a, b) => a + b, 0) / filtered.length : null
-
-  const pubSent = avg(nodes.filter((n) => n.type === 'public').map((n) => (n.sentiment + 1) * 50))
-  const medHeat = avg(nodes.filter((n) => n.type === 'media').map((n) => n.activation * 100))
-  const regPress = avg(nodes.filter((n) => n.type === 'regulator' || n.type === 'government').map((n) => n.activation * 100))
-  const intStab = avg(nodes.filter((n) => n.type === 'employees').map((n) => n.trustInCompany * 100))
-  const fraudR = avg(nodes.filter((n) => n.type === 'public' || n.type === 'influencer').map((n) => (1 - n.trustInCompany) * n.activation * 100))
-
-  const publicSentiment = Math.round(pubSent ?? 50)
-  const mediaHeat = Math.round(medHeat ?? 30)
-  const regulatoryPressure = Math.round(regPress ?? 20)
-  const internalStability = Math.round(intStab ?? 70)
-  const fraudRisk = Math.round(fraudR ?? 15)
-
-  const overall = Math.round(
-    0.3 * publicSentiment +
-    0.25 * (100 - mediaHeat) +
-    0.2 * (100 - regulatoryPressure) +
-    0.15 * internalStability +
-    0.1 * (100 - fraudRisk)
-  )
-
-  // Awareness derived from media + public activation
-  const awarenessFromMedia = medHeat ?? 10
-  const awarenessFromPublic = avg(nodes.filter((n) => n.type === 'public').map((n) => n.activation * 100))
-  const publicAwareness = Math.round((awarenessFromMedia * 0.6 + (awarenessFromPublic ?? 10) * 0.4))
-
-  return {
-    overall: Math.max(0, Math.min(100, overall)),
-    publicSentiment: Math.max(0, Math.min(100, publicSentiment)),
-    mediaHeat: Math.max(0, Math.min(100, mediaHeat)),
-    regulatoryPressure: Math.max(0, Math.min(100, regulatoryPressure)),
-    internalStability: Math.max(0, Math.min(100, internalStability)),
-    fraudRisk: Math.max(0, Math.min(100, fraudRisk)),
-    publicAwareness: Math.max(0, Math.min(100, publicAwareness)),
-  }
-}
+// Re-export extracted modules for backward compatibility
+export { applyInfluencePropagation, applyActivationDecay }
+export { calculateHealthScoresFromNodes }
 
 /**
  * processTickUpdates — single read-modify-write for all graph mutations in a tick.

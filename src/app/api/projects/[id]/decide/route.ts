@@ -32,32 +32,5 @@ export async function POST(
     },
   })
 
-  // Invalidate all pre-generated ticks AFTER this decision's tick
-  // so the next day regenerates with the decision context
-  const decisionTick = await prisma.tick.findUnique({
-    where: { id: pending.tickId },
-    select: { dayNumber: true, tickIndex: true },
-  })
-
-  if (decisionTick) {
-    const futureTicks = await prisma.tick.findMany({
-      where: {
-        projectId: id,
-        OR: [
-          { dayNumber: { gt: decisionTick.dayNumber } },
-          { dayNumber: decisionTick.dayNumber, tickIndex: { gt: decisionTick.tickIndex } },
-        ],
-      },
-      select: { id: true },
-    })
-
-    if (futureTicks.length > 0) {
-      await prisma.tick.deleteMany({
-        where: { id: { in: futureTicks.map((t) => t.id) } },
-      })
-      console.log(`[decide] Invalidated ${futureTicks.length} pre-generated ticks after decision`)
-    }
-  }
-
   return NextResponse.json(updated)
 }

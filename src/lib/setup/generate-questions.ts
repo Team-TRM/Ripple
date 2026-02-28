@@ -1,5 +1,5 @@
-import { mistral } from './client'
-import { QuestionsResponseSchema, type QuestionsResponse } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { QuestionsResponseSchema, type QuestionsResponse } from '@/lib/ai/schemas'
 
 const SYSTEM_PROMPT = `You are a crisis simulation analyst. The user has described a crisis they want to simulate. You need to gather enough context to build a realistic simulation.
 

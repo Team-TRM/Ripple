@@ -1,5 +1,5 @@
-import { mistral } from './client'
-import { SetupResponseSchema, type SetupResponse } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { SetupResponseSchema, type SetupResponse } from '@/lib/ai/schemas'
 
 const SYSTEM_PROMPT = `You are a crisis simulation analyst. Given an initial crisis situation and answered clarifying questions, generate:
 

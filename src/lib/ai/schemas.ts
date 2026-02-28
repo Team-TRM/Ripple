@@ -42,7 +42,7 @@ export const MessageSchema = z.object({
 
 export const CohortSummarySchema = z.object({
   cohortName: z.string(),
-  mood: z.enum(['Calm', 'Concerned', 'Angry', 'Confused', 'Fatigued']),
+  mood: z.enum(['Calm', 'Concerned', 'Angry', 'Confused', 'Fatigued']).catch('Concerned'),
   dominantNarrative: z.string(),
   behaviours: z.array(z.string()),
 })

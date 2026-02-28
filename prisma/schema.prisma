@@ -56,17 +56,18 @@ model Cohort {
 }
 
 model TimelineEvent {
-  id          String @id @default(cuid())
-  projectId   String
-  dayNumber   Int
-  dateLabel   String
-  title       String
-  description String @db.Text
+  id             String  @id @default(cuid())
+  projectId      String
+  dayNumber      Int
+  dateLabel      String  @default("")
+  title          String
+  description    String  @db.Text
+  isUserInjected Boolean @default(false)
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  @@unique([projectId, dayNumber])
   @@index([projectId])
+  @@index([projectId, dayNumber])
 }
 
 model Tick {

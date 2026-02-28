@@ -1,5 +1,5 @@
-import { mistral } from './client'
-import { TickResponseSchema, type TickResponse } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { TickResponseSchema, type TickResponse } from '@/lib/ai/schemas'
 
 const SYSTEM_PROMPT = `You are a crisis simulation engine. Generate realistic media content and audience perception summaries for a specific day of a crisis.
 

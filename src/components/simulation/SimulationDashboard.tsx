@@ -173,9 +173,6 @@ function DashboardInner({ projectId }: { projectId: string }) {
         console.error('Failed to load graph:', err)
       }
 
-      // Kick off pre-generation in background
-      fetch(`/api/projects/${projectId}/generate-ahead`, { method: 'POST' }).catch(() => {})
-
       // Auto-play after graph loads
       dispatch({ type: 'SET_PLAYING', isPlaying: true })
     }

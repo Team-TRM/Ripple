@@ -1,32 +1,9 @@
-import { mistral } from './client'
-import { ExecutiveAdvisorySchema, type ExecutiveAdvisory } from './schemas'
+import { mistral } from '@/lib/ai/client'
+import { ExecutiveAdvisorySchema, type ExecutiveAdvisory } from '@/lib/ai/schemas'
+import { EXECUTIVE_ROLES } from '@/lib/agents/executives/roles/role-definitions'
 
-export const EXECUTIVES = [
-  {
-    role: 'CTO',
-    name: 'Sarah Chen',
-    perspective: 'Technical risk, security, engineering capacity',
-    bias: 'Risk-averse on security, prefers defensible solutions',
-  },
-  {
-    role: 'Head of PR',
-    name: 'James Morrison',
-    perspective: 'Public perception, media narrative, brand',
-    bias: 'Prefers transparency, worried about viral moments',
-  },
-  {
-    role: 'Legal Counsel',
-    name: 'Priya Kapoor',
-    perspective: 'Legal liability, regulatory compliance',
-    bias: 'Conservative, minimal admission of fault',
-  },
-  {
-    role: 'Head of Operations',
-    name: 'David Okafor',
-    perspective: 'Business continuity, employee morale, cost',
-    bias: 'Pragmatic, actionable plans, internal stability',
-  },
-] as const
+// Re-export for backward compatibility
+export const EXECUTIVES = EXECUTIVE_ROLES
 
 const SYSTEM_PROMPT = `You are generating executive team recommendations for a crisis simulation. Read the FULL crisis context and decision prompt carefully, then generate advice that DIRECTLY addresses the specific situation.
 

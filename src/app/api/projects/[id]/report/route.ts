@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
-import { generateSimulationReport } from '@/lib/ai/generate-report'
+import { generateSimulationReport } from '@/lib/analysis/generate-report'
 
 // POST /api/projects/[id]/report — generate end-of-simulation report
 export async function POST(
