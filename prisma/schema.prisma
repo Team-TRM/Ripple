@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id             String   @id @default(cuid())
+  name           String
+  context        String   @db.Text
+  summary        String?  @db.Text
+  simulationDays Int?
+  currentDay     Int      @default(0)
+  isPaused       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  status         String   @default("setup") // setup | questions | ready | running
+  graphNodes     Json?    // GraphNode[] — stored in-memory graph state
+  graphEdges     Json?    // GraphEdge[] — stored in-memory graph edges
+
+  questions ProjectQuestion[]
+  cohorts   Cohort[]
+  events    TimelineEvent[]
+  ticks     Tick[]
+  decisions DecisionPoint[]
+}
+
+model ProjectQuestion {
+  id        String  @id @default(cuid())
+  projectId String
+  question  String  @db.Text
+  answer    String? @db.Text
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Cohort {
+  id               String @id @default(cuid())
+  projectId        String
+  name             String
+  description      String @db.Text
+  attentionWeights Json // { news: 0.8, social: 0.6, official: 0.9 }
+  sensitivityTags  Json // ["privacy", "financial"]
+
+  project   Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  summaries CohortSummary[]
+
+  @@index([projectId])
+}
+
+model TimelineEvent {
+  id          String @id @default(cuid())
+  projectId   String
+  dayNumber   Int
+  dateLabel   String
+  title       String
+  description String @db.Text
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, dayNumber])
+  @@index([projectId])
+}
+
+model Tick {
+  id           String @id @default(cuid())
+  projectId    String
+  dayNumber    Int
+  tickIndex    Int    @default(0) // 0=morning, 1=afternoon, 2=evening
+  subTickIndex Int    @default(0) // 0=generate, 1=observe, 2=update
+  dateLabel    String
+
+  project     Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  messages    Message[]
+  summaries   CohortSummary[]
+  healthScore HealthScore?
+  decisions   DecisionPoint[]
+
+  @@unique([projectId, dayNumber, tickIndex, subTickIndex])
+  @@index([projectId])
+}
+
+model Message {
+  id       String  @id @default(cuid())
+  tickId   String
+  type     String // news | influencer | official | comment | forum | secondary
+  author   String
+  content  String  @db.Text
+  parentId String?
+  reach    Float   @default(0.5) // 0-1, how widely this spreads
+  sentiment Float  @default(0)   // -1 to 1, tone
+
+  tick Tick @relation(fields: [tickId], references: [id], onDelete: Cascade)
+
+  @@index([tickId])
+}
+
+model CohortSummary {
+  id                String @id @default(cuid())
+  tickId            String
+  cohortId          String
+  mood              String
+  dominantNarrative String @db.Text
+  behaviours        Json
+
+  tick   Tick   @relation(fields: [tickId], references: [id], onDelete: Cascade)
+  cohort Cohort @relation(fields: [cohortId], references: [id], onDelete: Cascade)
+
+  @@unique([tickId, cohortId])
+  @@index([tickId])
+}
+
+model HealthScore {
+  id                 String @id @default(cuid())
+  tickId             String @unique
+  overall            Int // 0-100
+  publicSentiment    Int // 0-100
+  mediaHeat          Int // 0-100
+  regulatoryPressure Int // 0-100
+  internalStability  Int // 0-100
+  fraudRisk          Int // 0-100
+
+  tick Tick @relation(fields: [tickId], references: [id], onDelete: Cascade)
+}
+
+model DecisionPoint {
+  id           String  @id @default(cuid())
+  projectId    String
+  tickId       String
+  prompt       String  @db.Text
+  options      Json // string[]
+  chosenOption String?
+  userEvent    String? @db.Text
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tick    Tick    @relation(fields: [tickId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
