@@ -57,7 +57,7 @@ const TREND_ICONS: Record<string, { icon: string; color: string }> = {
 }
 
 export default function MetricsSidebar() {
-  const { healthScores, nodes, populationStats } = useSimulation()
+  const { healthScores, nodes, populationStats, agentActions } = useSimulation()
   const prevScoresRef = useRef(healthScores)
   const initializedRef = useRef(false)
   const [deltas, setDeltas] = useState({
@@ -135,6 +135,27 @@ export default function MetricsSidebar() {
         <MetricBar label="Internal Stability" value={healthScores.internalStability} color="#059669" delta={deltas.internalStability} />
         <MetricBar label="Fraud Risk" value={healthScores.fraudRisk} color="#DC2626" delta={deltas.fraudRisk} />
       </div>
+
+      {/* Population Stats */}
+      {agentActions.length > 0 && (
+        <div className="p-4 border-b border-gray-800/50">
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2">
+            Agent Actions (This Tick)
+          </div>
+          <div className="space-y-2">
+            {agentActions.slice(0, 5).map((action) => (
+              <div key={action.id} className="rounded-md border border-gray-800/60 bg-gray-900/35 p-2">
+                <div className="text-[11px] text-cyan-300 font-medium truncate">
+                  {action.agentLabel} · {action.tool.replaceAll('_', ' ')}
+                </div>
+                <div className="text-[10px] text-gray-500 leading-snug mt-0.5 line-clamp-2">
+                  {action.impact}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Population Stats */}
       {populationStats.length > 0 && (

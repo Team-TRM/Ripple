@@ -54,28 +54,35 @@ The main orchestration function (~300 lines). Executes in this order:
 **Phase 3: LLM Generation**
 - Call `generateEnhancedTick()` → returns messages, cohort updates, health deltas, optional decision prompt, optional new nodes
 
-**Phase 4: Graph Mutations**
+**Phase 4: Autonomous Agent Loop**
+- Select top active/connected nodes
+- Run independent per-node planner calls in parallel
+- Execute deterministic tool actions
+- Merge autonomous node updates, health deltas, and agent action messages
+
+**Phase 5: Graph Mutations**
 - Call `processTickUpdates()` with LLM cohort deltas
 - Returns updated nodes + edges
 
-**Phase 5: Health Scoring**
+**Phase 6: Health Scoring**
 - Calculate health from node states via `calculateHealthScoresFromNodes()`
 - Apply LLM health deltas (bounded, additive)
+- Apply autonomous tool health deltas (bounded, additive)
 - Clamp all scores to [0, 100]
 
-**Phase 6: Database Storage**
+**Phase 7: Database Storage**
 - Create 3 sub-tick records (generate=0, observe=1, update=2) in single transaction
 - Store messages on generate sub-tick
 - Store cohort summaries on observe sub-tick
 - Store health scores on update sub-tick
 - Save graph snapshot on generate sub-tick (for rerun branching)
 
-**Phase 7: Decision Generation (Evening Only)**
+**Phase 8: Decision Generation (Evening Only)**
 - If LLM produced a decision prompt (tickIndex === 2)
 - Call `generateExecutiveAdvice()` → 4 C-suite recommendations
 - Create `DecisionPoint` record with prompt, options, and recommendations
 
-**Phase 8: Population Stats**
+**Phase 9: Population Stats**
 - Recalculate active speakers and sentiment trends from node states
 
 ## Graph Engine (`src/lib/simulation/engine/graph-engine.ts`)

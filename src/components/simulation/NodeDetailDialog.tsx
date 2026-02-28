@@ -67,6 +67,9 @@ export default function NodeDetailDialog() {
           <StatBar label="Sentiment" value={node.sentiment} min={-1} max={1} color="#3B82F6" />
           <StatBar label="Activation" value={node.activation} min={0} max={1} color="#F59E0B" />
           <StatBar label="Trust in Company" value={node.trustInCompany} min={0} max={1} color="#059669" />
+          <p className="text-[10px] text-cyan-400/80 leading-relaxed">
+            Zoom in on this node to inspect its micro-agent swarm.
+          </p>
         </div>
 
         {/* Narrative */}

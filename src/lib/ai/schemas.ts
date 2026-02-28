@@ -126,6 +126,30 @@ export const HealthDeltasSchema = z.object({
   publicAwarenessDelta: z.number().transform((v) => Math.max(0, Math.min(8, v))).optional().default(0),
 })
 
+export const AgentToolSchema = z.enum([
+  'publish_message',
+  'amplify_signal',
+  'deescalate_narrative',
+  'trigger_regulatory_attention',
+  'stabilize_internal_comms',
+])
+export type AgentTool = z.infer<typeof AgentToolSchema>
+
+const AgentPlanArgsSchema = z.object({
+  intensity: z.number().transform((v) => Math.max(0, Math.min(1, v))).optional().default(0.6),
+  targetNodeLabel: z.string().optional().catch(undefined),
+  narrative: z.string().optional().catch(undefined),
+})
+
+export const AgentPlanSchema = z.object({
+  agentNodeId: z.string(),
+  goal: z.string(),
+  tool: AgentToolSchema,
+  args: AgentPlanArgsSchema.optional().default({ intensity: 0.6 }),
+  confidence: z.number().transform((v) => Math.max(0, Math.min(1, v))).optional().default(0.5),
+})
+export type AgentPlan = z.infer<typeof AgentPlanSchema>
+
 export const NewNodeSchema = z.object({
   label: z.string(),
   type: z.enum(['public', 'government', 'media', 'employees', 'company', 'influencer', 'regulator']).catch('public'),

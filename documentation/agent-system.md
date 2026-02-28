@@ -42,6 +42,24 @@ The main LLM call for tick generation. Assembles a comprehensive prompt from all
 
 **Retry logic:** If JSON parsing fails, retry once at higher temperature (0.5 → 0.6). Max 2 attempts.
 
+### `autonomous-agent-loop.ts` — per-actor planning + tool execution
+
+After the orchestrator call, the engine selects top active/connected nodes and runs independent planning calls in parallel. Each selected actor chooses a tool action, which is then executed deterministically.
+
+Available tools:
+
+- `publish_message`
+- `amplify_signal`
+- `deescalate_narrative`
+- `trigger_regulatory_attention`
+- `stabilize_internal_comms`
+
+Tool execution is bounded and merged into:
+
+- node updates (`sentimentDelta`, `activationDelta`, `trustDelta`)
+- health deltas
+- agent action messages (visible in live events and the Agent Actions panel)
+
 ### `context-builder.ts` — Prompt Assembly
 
 Builds the user prompt from:

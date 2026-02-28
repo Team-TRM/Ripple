@@ -9,6 +9,9 @@ import { initializePopulationStats } from '@/lib/agents/cohorts/population/popul
 
 type EditedCohort = { id: string; name: string; description: string }
 type EditedEvent = { id: string; title: string; description: string }
+const MIN_SIM_DAYS = 3
+const MAX_SIM_DAYS = 60
+const DEFAULT_SIM_DAYS = 7
 
 // POST /api/projects/[id]/confirm — persist edits, generate tick 0, create graph, status → "running"
 // Streams progress events via SSE
@@ -23,6 +26,10 @@ export async function POST(
     cohorts?: EditedCohort[]
     events?: EditedEvent[]
   }
+  const requestedDays = Number(simulationDays)
+  const safeSimulationDays = Number.isFinite(requestedDays)
+    ? Math.max(MIN_SIM_DAYS, Math.min(MAX_SIM_DAYS, Math.round(requestedDays)))
+    : DEFAULT_SIM_DAYS
 
   const project = await prisma.project.findUnique({
     where: { id },
@@ -219,7 +226,7 @@ export async function POST(
         await prisma.project.update({
           where: { id },
           data: {
-            simulationDays,
+            simulationDays: safeSimulationDays,
             status: 'running',
             speakerProfiles: speakerData.speakers as unknown as Prisma.InputJsonValue,
             populationStats: populationStats as unknown as Prisma.InputJsonValue,

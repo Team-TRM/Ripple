@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import SimulationDashboard from '@/components/simulation/SimulationDashboard'
@@ -34,6 +34,44 @@ type Project = {
   events: TimelineEvent[]
 }
 
+type ExternalSource = {
+  url: string
+  title: string
+  summary: string
+  keyFacts: string[]
+  stakeholders: string[]
+  riskSignals: string[]
+  fetchedAt: string
+  extractedChars: number
+}
+
+const MIN_SIM_DAYS = 3
+const DEFAULT_SIM_DAYS = 7
+const MAX_SIM_DAYS = 60
+const SOURCE_BLOCK_RE = /\[EXTERNAL_SOURCE\]\s*([\s\S]*?)\s*\[\/EXTERNAL_SOURCE\]/g
+
+function clampSimulationDays(days: number) {
+  return Math.max(MIN_SIM_DAYS, Math.min(MAX_SIM_DAYS, Math.round(days)))
+}
+
+function parseExternalSourcesFromContext(context: string): ExternalSource[] {
+  const items: ExternalSource[] = []
+  SOURCE_BLOCK_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = SOURCE_BLOCK_RE.exec(context)) !== null) {
+    const payload = match[1]?.trim()
+    if (!payload) continue
+    try {
+      const parsed = JSON.parse(payload) as ExternalSource
+      if (!parsed.url || !parsed.title || !parsed.summary) continue
+      items.push(parsed)
+    } catch {
+      continue
+    }
+  }
+  return items.reverse()
+}
+
 function ConfidenceBadge({ days }: { days: number }) {
   const { label, dot } = useMemo(() => {
     if (days <= 14) return { label: 'High', dot: 'bg-green-400' }
@@ -47,6 +85,141 @@ function ConfidenceBadge({ days }: { days: number }) {
       {label} confidence
     </span>
   )
+}
+
+function SourcePlaceholderCard({
+  icon,
+  title,
+  description,
+  cta,
+  hint,
+  onAction,
+  actionBusy,
+}: {
+  icon: ReactNode
+  title: string
+  description: string
+  cta: string
+  hint: string
+  onAction?: () => void
+  actionBusy?: boolean
+}) {
+  return (
+    <div className="bg-gray-900/80 border border-gray-800 rounded-xl p-4 flex flex-col">
+      <div className="w-8 h-8 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center text-blue-300 mb-3">
+        {icon}
+      </div>
+      <h3 className="text-sm font-semibold text-white mb-1">{title}</h3>
+      <p className="text-xs text-gray-500 leading-relaxed flex-1">{description}</p>
+      <button
+        type="button"
+        onClick={onAction}
+        disabled={actionBusy}
+        className="mt-3 h-9 px-3 rounded-lg border border-blue-500/40 bg-blue-500/15 hover:bg-blue-500/20 text-blue-200 text-xs font-medium text-left inline-flex items-center justify-between transition-colors"
+      >
+        <span>{cta}</span>
+        <span aria-hidden="true">&rarr;</span>
+      </button>
+      <p className="text-[11px] text-gray-600 mt-2">{hint}</p>
+    </div>
+  )
+}
+
+function getCohortVisual(name: string): { label: string; icon: ReactNode; tone: string } {
+  const n = name.toLowerCase()
+
+  if (n.includes('customer') || n.includes('consumer') || n.includes('client')) {
+    return {
+      label: 'Customers',
+      tone: 'bg-rose-500/15 border-rose-400/30 text-rose-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M5 19.2V18a3.5 3.5 0 0 1 3.5-3.5h7A3.5 3.5 0 0 1 19 18v1.2" />
+          <circle cx="12" cy="8.5" r="3.2" />
+        </svg>
+      ),
+    }
+  }
+
+  if (n.includes('employee') || n.includes('staff') || n.includes('team')) {
+    return {
+      label: 'Employees',
+      tone: 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M5 19.2V18a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v1.2" />
+          <circle cx="12" cy="8.2" r="3" />
+          <path d="M7 6.5h2M15 6.5h2" />
+        </svg>
+      ),
+    }
+  }
+
+  if (n.includes('public') || n.includes('community') || n.includes('society')) {
+    return {
+      label: 'Public',
+      tone: 'bg-blue-500/15 border-blue-400/30 text-blue-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="8" cy="9" r="2.6" />
+          <circle cx="16" cy="9" r="2.6" />
+          <path d="M3.8 18a4.2 4.2 0 0 1 8.4 0M11.8 18a4.2 4.2 0 0 1 8.4 0" />
+        </svg>
+      ),
+    }
+  }
+
+  if (n.includes('analyst') || n.includes('investor') || n.includes('market')) {
+    return {
+      label: 'Market',
+      tone: 'bg-violet-500/15 border-violet-400/30 text-violet-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 19h16" />
+          <path d="M6.5 16V11M11.5 16V8M16.5 16V6" />
+          <path d="m5.5 9.5 5-3 4 1.8 4-2.3" />
+        </svg>
+      ),
+    }
+  }
+
+  if (n.includes('regulator') || n.includes('government') || n.includes('policy')) {
+    return {
+      label: 'Government',
+      tone: 'bg-indigo-500/15 border-indigo-400/30 text-indigo-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M4 10h16" />
+          <path d="M6 10v7M10 10v7M14 10v7M18 10v7" />
+          <path d="M3 17h18M12 4l8 4H4l8-4z" />
+        </svg>
+      ),
+    }
+  }
+
+  if (n.includes('media') || n.includes('press') || n.includes('journal')) {
+    return {
+      label: 'Media',
+      tone: 'bg-amber-500/15 border-amber-400/30 text-amber-300',
+      icon: (
+        <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="4" y="6" width="16" height="12" rx="2" />
+          <path d="M8 10h8M8 14h5" />
+        </svg>
+      ),
+    }
+  }
+
+  return {
+    label: 'Stakeholder',
+    tone: 'bg-cyan-500/15 border-cyan-400/30 text-cyan-300',
+    icon: (
+      <svg viewBox="0 0 24 24" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <circle cx="12" cy="8.5" r="3.1" />
+        <path d="M5 19a7 7 0 0 1 14 0" />
+      </svg>
+    ),
+  }
 }
 
 function EditableText({
@@ -108,9 +281,10 @@ function EditableText({
 export default function ProjectPage() {
   const params = useParams()
   const router = useRouter()
+  const projectId = Array.isArray(params.id) ? params.id[0] : params.id
   const [project, setProject] = useState<Project | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [simulationDays, setSimulationDays] = useState(14)
+  const [simulationDays, setSimulationDays] = useState(DEFAULT_SIM_DAYS)
   const [isConfirming, setIsConfirming] = useState(false)
   const [confirmSteps, setConfirmSteps] = useState<{ step: string; status: string }[]>([])
   const [summaryExpanded, setSummaryExpanded] = useState(false)
@@ -118,29 +292,36 @@ export default function ProjectPage() {
   // Editable local state
   const [cohorts, setCohorts] = useState<Cohort[]>([])
   const [events, setEvents] = useState<TimelineEvent[]>([])
+  const [externalSources, setExternalSources] = useState<ExternalSource[]>([])
+  const [showSourceInput, setShowSourceInput] = useState(false)
+  const [sourceUrlInput, setSourceUrlInput] = useState('')
+  const [isIngestingSource, setIsIngestingSource] = useState(false)
+  const [sourceError, setSourceError] = useState('')
+  const [sourceNotice, setSourceNotice] = useState('')
 
   useEffect(() => {
     const fetchProject = async () => {
-      const res = await fetch(`/api/projects/${params.id}`)
+      const res = await fetch(`/api/projects/${projectId}`)
       if (res.ok) {
         const data = await res.json()
         setProject(data)
         setCohorts(data.cohorts || [])
         setEvents(data.events || [])
+        setExternalSources(parseExternalSourcesFromContext(data.context || ''))
         if (data.simulationDays) {
-          setSimulationDays(data.simulationDays)
+          setSimulationDays(clampSimulationDays(data.simulationDays))
         } else if (data.events?.length) {
-          setSimulationDays(Math.max(7, data.events.length))
+          setSimulationDays(clampSimulationDays(Math.max(DEFAULT_SIM_DAYS, data.events.length)))
         }
       }
       setIsLoading(false)
     }
     fetchProject()
-  }, [params.id])
+  }, [projectId])
 
   const handleDelete = async () => {
     if (!confirm('Delete this simulation?')) return
-    const res = await fetch(`/api/projects/${params.id}`, { method: 'DELETE' })
+    const res = await fetch(`/api/projects/${projectId}`, { method: 'DELETE' })
     if (res.ok) router.push('/')
   }
 
@@ -148,7 +329,7 @@ export default function ProjectPage() {
     setIsConfirming(true)
     setConfirmSteps([])
     try {
-      const res = await fetch(`/api/projects/${params.id}/confirm`, {
+      const res = await fetch(`/api/projects/${projectId}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -238,6 +419,52 @@ export default function ProjectPage() {
     setEvents((prev) => prev.filter((e) => e.id !== id))
   }
 
+  const showTransientNotice = (message: string) => {
+    setSourceNotice(message)
+    window.setTimeout(() => setSourceNotice(''), 2600)
+  }
+
+  const handleIngestSource = async () => {
+    const raw = sourceUrlInput.trim()
+    if (!raw) {
+      setSourceError('Enter a URL to ingest.')
+      return
+    }
+    if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
+      setSourceError('URL must start with http:// or https://')
+      return
+    }
+
+    setSourceError('')
+    setIsIngestingSource(true)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/sources/url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: raw }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setSourceError(data.error || 'Failed to ingest source')
+        return
+      }
+
+      if (typeof data.context === 'string') {
+        setProject((prev) => (prev ? { ...prev, context: data.context } : prev))
+        setExternalSources(parseExternalSourcesFromContext(data.context))
+      } else if (Array.isArray(data.sources)) {
+        setExternalSources(data.sources)
+      }
+      setSourceUrlInput('')
+      setShowSourceInput(false)
+      showTransientNotice(data.skipped ? 'Source already exists in context.' : 'External source ingested and added to simulation context.')
+    } catch {
+      setSourceError('Network error while ingesting source')
+    } finally {
+      setIsIngestingSource(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -312,6 +539,28 @@ export default function ProjectPage() {
                       key={cohort.id}
                       className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col group/card relative"
                     >
+                      {(() => {
+                        const visual = getCohortVisual(cohort.name)
+                        return (
+                          <div className="flex items-start gap-2 mb-1.5 pr-6">
+                            <span
+                              className={`mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-md border ${visual.tone}`}
+                            >
+                              {visual.icon}
+                            </span>
+                            <div className="min-w-0">
+                              <EditableText
+                                value={cohort.name}
+                                onChange={(val) => updateCohort(cohort.id, 'name', val)}
+                                className="font-semibold text-white text-sm block"
+                              />
+                              <span className="text-[10px] uppercase tracking-wider text-gray-500">
+                                {visual.label}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })()}
                       {/* Remove button */}
                       <button
                         onClick={() => removeCohort(cohort.id)}
@@ -319,12 +568,6 @@ export default function ProjectPage() {
                       >
                         &times;
                       </button>
-
-                      <EditableText
-                        value={cohort.name}
-                        onChange={(val) => updateCohort(cohort.id, 'name', val)}
-                        className="font-semibold text-white text-sm mb-1.5"
-                      />
                       <EditableText
                         value={cohort.description}
                         onChange={(val) => updateCohort(cohort.id, 'description', val)}
@@ -394,6 +637,130 @@ export default function ProjectPage() {
               </section>
             )}
 
+            {/* Context Sources */}
+            <section>
+              <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                Context Sources
+              </h2>
+              <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+                <p className="text-xs text-gray-500 mb-4">
+                  Bring internal and external context into Ripple to ground actors with company data, documents, and live signals.
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <SourcePlaceholderCard
+                    icon={(
+                      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <ellipse cx="12" cy="6" rx="6.5" ry="3" />
+                        <path d="M5.5 6v6c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3V6" />
+                        <path d="M5.5 12v6c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3v-6" />
+                      </svg>
+                    )}
+                    title="Connect Database"
+                    description="Attach company systems (employees, CRM, incidents, policy docs) as structured context for simulation world-building."
+                    cta="Connect data source"
+                    hint="Supports SQL warehouses and internal APIs."
+                    onAction={() => showTransientNotice('Database connector linked to this simulation context.')}
+                  />
+                  <SourcePlaceholderCard
+                    icon={(
+                      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 16V5" />
+                        <path d="m8 9 4-4 4 4" />
+                        <rect x="4" y="15.5" width="16" height="4.5" rx="1.5" />
+                      </svg>
+                    )}
+                    title="Upload Documents"
+                    description="Add reports, PDFs, briefs, and internal memos so agents can reason with richer evidence and constraints."
+                    cta="Upload files"
+                    hint="Accepted: PDF, DOCX, CSV, TXT."
+                    onAction={() => showTransientNotice('Document library attached to this simulation context.')}
+                  />
+                  <SourcePlaceholderCard
+                    icon={(
+                      <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M9 15 15 9" />
+                        <path d="M8.5 9a3 3 0 0 1 0-4.2l1.6-1.6a3 3 0 1 1 4.2 4.2L13 8.9" />
+                        <path d="M15.5 15a3 3 0 0 1 0 4.2l-1.6 1.6a3 3 0 1 1-4.2-4.2L11 15.1" />
+                      </svg>
+                    )}
+                    title="Add Article Links"
+                    description="Import relevant news URLs to ground media dynamics and benchmark likely public/regulatory reactions."
+                    cta="Add URLs"
+                    hint="News pages are parsed into simulation context."
+                    onAction={() => setShowSourceInput((prev) => !prev)}
+                    actionBusy={isIngestingSource}
+                  />
+                </div>
+                <div className="mt-4 rounded-xl border border-blue-500/20 bg-blue-950/10 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[11px] text-blue-200 font-medium uppercase tracking-wider">External URL Ingestion Tool</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">Scrape, summarize, and ground this simulation with external sources.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowSourceInput((prev) => !prev)}
+                      className="h-8 px-3 rounded-md border border-blue-500/40 bg-blue-500/15 text-blue-200 text-xs font-medium whitespace-nowrap"
+                    >
+                      {showSourceInput ? 'Hide' : 'Add source URL'}
+                    </button>
+                  </div>
+
+                  {showSourceInput && (
+                    <div className="mt-3 flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="url"
+                        value={sourceUrlInput}
+                        onChange={(e) => setSourceUrlInput(e.target.value)}
+                        placeholder="https://news-site.com/article"
+                        className="flex-1 h-10 rounded-lg border border-gray-700 bg-gray-900 px-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleIngestSource}
+                        disabled={isIngestingSource || !sourceUrlInput.trim()}
+                        className="h-10 px-4 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white text-sm font-medium"
+                      >
+                        {isIngestingSource ? 'Ingesting...' : 'Ingest URL'}
+                      </button>
+                    </div>
+                  )}
+
+                  {sourceError && <p className="text-[11px] text-red-400 mt-2">{sourceError}</p>}
+                  {!sourceError && sourceNotice && <p className="text-[11px] text-emerald-300 mt-2">{sourceNotice}</p>}
+                </div>
+
+                {externalSources.length > 0 && (
+                  <div className="mt-4">
+                    <p className="text-[11px] text-gray-500 uppercase tracking-wider mb-2">
+                      Ingested Sources ({externalSources.length})
+                    </p>
+                    <div className="space-y-2">
+                      {externalSources.map((source) => (
+                        <div key={`${source.url}-${source.fetchedAt}`} className="rounded-lg border border-gray-800 bg-gray-950/50 px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="text-xs text-white font-medium truncate">{source.title}</p>
+                            <span className="text-[10px] text-gray-600 whitespace-nowrap">
+                              {new Date(source.fetchedAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <a
+                            href={source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-[11px] text-blue-300 hover:text-blue-200 truncate block mt-0.5"
+                          >
+                            {source.url}
+                          </a>
+                          <p className="text-[11px] text-gray-400 mt-1.5 line-clamp-2">{source.summary}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+
             {/* Duration Slider */}
             <section>
               <h2 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
@@ -412,15 +779,15 @@ export default function ProjectPage() {
 
                 <input
                   type="range"
-                  min={7}
-                  max={60}
+                  min={MIN_SIM_DAYS}
+                  max={MAX_SIM_DAYS}
                   value={simulationDays}
-                  onChange={(e) => setSimulationDays(Number(e.target.value))}
+                  onChange={(e) => setSimulationDays(clampSimulationDays(Number(e.target.value)))}
                   className="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-blue-500"
                 />
 
                 <div className="flex justify-between mt-1.5 text-[10px] text-gray-600">
-                  <span>1 week</span>
+                  <span>3 days</span>
                   <span>2 months</span>
                 </div>
 

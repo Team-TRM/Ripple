@@ -279,7 +279,7 @@ export function CreateProjectModal({ isOpen, onClose, onCreated }: Props) {
             {step === 'chat' && (
               <div className="px-6 py-4 border-t border-gray-800">
                 {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
-                <div className="flex gap-3">
+                <div className="flex items-end gap-3">
                   <textarea
                     ref={inputRef}
                     value={currentAnswer}
@@ -291,9 +291,31 @@ export function CreateProjectModal({ isOpen, onClose, onCreated }: Props) {
                     className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 resize-none focus:outline-none focus:border-blue-500 transition-colors text-sm disabled:opacity-50"
                   />
                   <button
+                    type="button"
+                    aria-label="Voice input coming soon"
+                    title="Voice mode (STT/TTS) coming soon"
+                    className="h-11 w-11 shrink-0 rounded-xl border border-gray-700 bg-gray-800 text-gray-400 flex items-center justify-center"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      className="w-[18px] h-[18px] block"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden="true"
+                    >
+                      <rect x="9" y="2.8" width="6" height="10.8" rx="3" />
+                      <path d="M6.8 10.2a5.2 5.2 0 0 0 10.4 0" />
+                      <path d="M12 16v3.8" />
+                      <path d="M9 20h6" />
+                    </svg>
+                  </button>
+                  <button
                     onClick={handleSubmitAnswer}
                     disabled={!currentAnswer.trim() || isTyping}
-                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white px-4 rounded-xl font-medium transition-colors self-end h-11"
+                    className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 disabled:cursor-not-allowed text-white px-4 rounded-xl font-medium transition-colors h-11 shrink-0"
                   >
                     Send
                   </button>

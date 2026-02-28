@@ -26,22 +26,92 @@ const TYPE_LABELS: Record<string, string> = {
   regulator: 'REG',
 }
 
+const BASE_NODE_RADIUS = 12
+const NODE_RADIUS_RANGE = 24
+const ACTIVATION_LERP = 0.14
+const SWARM_ZOOM_THRESHOLD = 1.22
+const SWARM_MAX_AGENTS = 120
+const UNSELECTED_SWARM_CAP = 40
+
+type SwarmAgent = {
+  id: string
+  angle: number
+  orbit: number
+  phase: number
+  sizeSeed: number
+  activityBias: number
+  sentimentBias: number
+  displayWeight: number
+}
+
+type RenderGraphNode = {
+  id: string
+  label: string
+  type: string
+  color: string
+  sentiment: number
+  activation: number
+  targetActivation: number
+  displayActivation: number
+  trustInCompany: number
+  x?: number
+  y?: number
+}
+
+type RenderGraphData = {
+  nodes: RenderGraphNode[]
+  links: { source: string; target: string; weight: number }[]
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function withAlpha(hexColor: string, alpha: number): string {
+  if (/^#[0-9A-Fa-f]{6}$/.test(hexColor)) {
+    return `${hexColor}${Math.round(clamp(alpha, 0, 1) * 255).toString(16).padStart(2, '0')}`
+  }
+  return `rgba(255,255,255,${clamp(alpha, 0, 1)})`
+}
+
+function seededUnit(seed: string): number {
+  let h = 2166136261
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i)
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24)
+  }
+  return Math.abs(h % 10000) / 10000
+}
+
 export default function GraphVisualization() {
-  const { nodes, edges, selectedNodeId } = useSimulation()
+  const { nodes, edges, selectedNodeId, populationStats, agentActions } = useSimulation()
   const dispatch = useSimulationDispatch()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const graphRef = useRef<any>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
   const containerRef = useRef<HTMLDivElement>(null)
-  // Animation clock updated via setInterval (not RAF to avoid perf issues)
+  // Animation clock for pulse effects
   const tickRef = useRef(0)
+  const zoomLevelRef = useRef(1)
+  const topologyRef = useRef({ nodeCount: 0, edgeCount: 0 })
   // Stable node map — preserves x/y positions across updates
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const nodeMapRef = useRef<Map<string, any>>(new Map())
+  const nodeMapRef = useRef<Map<string, RenderGraphNode>>(new Map())
+  const swarmMapRef = useRef<Map<string, SwarmAgent[]>>(new Map())
+  const [graphData, setGraphData] = useState<RenderGraphData>({ nodes: [], links: [] })
+  const activeActionNodeIds = useMemo(
+    () => new Set(agentActions.map((a) => a.agentNodeId)),
+    [agentActions]
+  )
 
   useEffect(() => {
-    const id = setInterval(() => { tickRef.current++ }, 50)
-    return () => clearInterval(id)
+    let rafId = 0
+    const animate = () => {
+      tickRef.current += 1
+      graphRef.current?.refresh?.()
+      rafId = requestAnimationFrame(animate)
+    }
+    rafId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(rafId)
   }, [])
 
   // Configure forces only once
@@ -52,11 +122,51 @@ export default function GraphVisualization() {
     forcesConfigured.current = true
     const fg = graphRef.current
     if (fg.d3Force) {
-      fg.d3Force('charge')?.strength(-600)?.distanceMax(700)
-      fg.d3Force('link')?.distance(200)
-      fg.d3Force('center')?.strength(0.03)
+      fg.d3Force('charge')?.strength(-380)?.distanceMax(520)
+      fg.d3Force('link')?.distance(170)
+      fg.d3Force('center')?.strength(0.02)
     }
   }, [nodes])
+
+  // Let layout settle briefly on topology changes, then pin node positions to avoid jitter.
+  useEffect(() => {
+    if (!graphRef.current || nodes.length === 0) return
+
+    const nodeCount = nodes.length
+    const edgeCount = edges.length
+    const topologyChanged =
+      topologyRef.current.nodeCount !== nodeCount ||
+      topologyRef.current.edgeCount !== edgeCount
+
+    topologyRef.current = { nodeCount, edgeCount }
+    if (!topologyChanged) return
+
+    const fg = graphRef.current
+    const data = fg.graphData?.()
+    if (data?.nodes) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const n of data.nodes as any[]) {
+        n.fx = undefined
+        n.fy = undefined
+      }
+    }
+
+    fg.d3ReheatSimulation?.()
+
+    const timer = window.setTimeout(() => {
+      const latest = fg.graphData?.()
+      if (!latest?.nodes) return
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const n of latest.nodes as any[]) {
+        if (typeof n.x === 'number' && typeof n.y === 'number') {
+          n.fx = n.x
+          n.fy = n.y
+        }
+      }
+    }, 900)
+
+    return () => window.clearTimeout(timer)
+  }, [nodes.length, edges.length])
 
   // Zoom to fit on initial load
   const hasZoomed = useRef(false)
@@ -86,9 +196,10 @@ export default function GraphVisualization() {
   }, [])
 
   // Build stable graphData — update properties in place, only add/remove nodes when needed
-  const graphData = useMemo(() => {
+  useEffect(() => {
     const currentIds = new Set(nodes.map((n) => n.nodeId))
     const existingIds = new Set(nodeMapRef.current.keys())
+    const populationByCohort = new Map(populationStats.map((p) => [p.cohortName, p]))
 
     // Update existing nodes in place (preserves x/y/vx/vy from force sim)
     for (const n of nodes) {
@@ -99,12 +210,17 @@ export default function GraphVisualization() {
         existing.color = NODE_COLORS[n.type] || n.color || '#6B7280'
         existing.sentiment = n.sentiment
         existing.activation = n.activation
+        existing.targetActivation = n.activation
+        if (!Number.isFinite(existing.displayActivation)) {
+          existing.displayActivation = n.activation
+        }
         existing.trustInCompany = n.trustInCompany
       } else {
         // New node — spread initial positions in a circle to avoid clustering
         const idx = nodeMapRef.current.size
         const angle = (idx / Math.max(nodes.length, 1)) * Math.PI * 2
-        const spread = 250 + Math.random() * 150
+        const seed = n.nodeId.split('').reduce((sum, ch) => sum + ch.charCodeAt(0), 0)
+        const spread = 250 + (seed % 150)
         nodeMapRef.current.set(n.nodeId, {
           id: n.nodeId,
           label: n.label,
@@ -112,41 +228,89 @@ export default function GraphVisualization() {
           color: NODE_COLORS[n.type] || n.color || '#6B7280',
           sentiment: n.sentiment,
           activation: n.activation,
+          targetActivation: n.activation,
+          displayActivation: n.activation,
           trustInCompany: n.trustInCompany,
           x: Math.cos(angle) * spread,
           y: Math.sin(angle) * spread,
         })
       }
+
+      // Keep a stable synthetic swarm per node for zoomed-in cohort view.
+      const pop = populationByCohort.get(n.label)
+      const activeRatio = pop && pop.population > 0
+        ? pop.activeSpeakers / pop.population
+        : n.activation
+      const desiredCount = Math.round(clamp(18 + activeRatio * 96, 18, SWARM_MAX_AGENTS))
+      const existingSwarm = swarmMapRef.current.get(n.nodeId) || []
+      const nextSwarm: SwarmAgent[] = []
+      for (let i = 0; i < desiredCount; i++) {
+        const old = existingSwarm[i]
+        if (old) {
+          nextSwarm.push(old)
+          continue
+        }
+        const seedBase = `${n.nodeId}-${i}`
+        nextSwarm.push({
+          id: seedBase,
+          angle: seededUnit(`${seedBase}-angle`) * Math.PI * 2,
+          orbit: seededUnit(`${seedBase}-orbit`),
+          phase: seededUnit(`${seedBase}-phase`) * Math.PI * 2,
+          sizeSeed: seededUnit(`${seedBase}-size`),
+          activityBias: seededUnit(`${seedBase}-activity`),
+          sentimentBias: seededUnit(`${seedBase}-sent`) * 2 - 1,
+          displayWeight: seededUnit(`${seedBase}-weight`) * 0.6 + 0.2,
+        })
+      }
+      swarmMapRef.current.set(n.nodeId, nextSwarm)
     }
 
     // Remove deleted nodes
     for (const id of existingIds) {
       if (!currentIds.has(id)) {
         nodeMapRef.current.delete(id)
+        swarmMapRef.current.delete(id)
       }
     }
 
-    return {
+    setGraphData({
       nodes: Array.from(nodeMapRef.current.values()),
       links: edges.map((e) => ({
         source: e.source,
         target: e.target,
         weight: e.weight,
       })),
-    }
-  }, [nodes, edges])
+    })
+  }, [nodes, edges, populationStats])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const nodeCanvasObject = useCallback((node: any, ctx: CanvasRenderingContext2D) => {
     const x = node.x || 0
     const y = node.y || 0
-    const activation = node.activation || 0.3
+    const targetActivation = node.targetActivation ?? node.activation ?? 0.3
+    const prevDisplayActivation = node.displayActivation ?? targetActivation
+    const interpolatedActivation =
+      prevDisplayActivation + (targetActivation - prevDisplayActivation) * ACTIVATION_LERP
+    const activation = Math.abs(targetActivation - interpolatedActivation) < 0.001
+      ? targetActivation
+      : interpolatedActivation
+    node.displayActivation = activation
     const sentiment = node.sentiment || 0
     const isSelected = selectedNodeId === node.id
     const color = node.color || '#6B7280'
+    const isActing = activeActionNodeIds.has(node.id)
 
-    const radius = 12 + activation * 24
+    const radius = BASE_NODE_RADIUS + activation * NODE_RADIUS_RANGE
     const t = tickRef.current
+
+    if (isActing) {
+      const pulse = 0.55 + 0.45 * Math.sin(t * 0.12)
+      ctx.beginPath()
+      ctx.arc(x, y, radius + 8, 0, Math.PI * 2)
+      ctx.strokeStyle = withAlpha('#22D3EE', 0.35 * pulse + 0.25)
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
 
     // Pulse ring for high activation
     if (activation > 0.6) {
@@ -196,6 +360,50 @@ export default function GraphVisualization() {
       ctx.setLineDash([])
     }
 
+    // Zoomed-in synthetic micro-agent view for selected node.
+    const zoom = zoomLevelRef.current
+    const swarmProgress = clamp((zoom - SWARM_ZOOM_THRESHOLD) / 0.75, 0, 1)
+    const showSwarm = swarmProgress > 0.01 && (isSelected || zoom > SWARM_ZOOM_THRESHOLD + 0.12)
+    if (showSwarm) {
+      const swarm = swarmMapRef.current.get(node.id) || []
+      const renderMembers = isSelected ? swarm : swarm.slice(0, UNSELECTED_SWARM_CAP)
+      const swirlSpeed = 0.004 + activation * 0.004
+      ctx.beginPath()
+      ctx.arc(x, y, radius + 10 + 18 * swarmProgress, 0, Math.PI * 2)
+      ctx.strokeStyle = withAlpha(color, 0.22 + swarmProgress * 0.18)
+      ctx.lineWidth = 1
+      ctx.stroke()
+
+      for (const member of renderMembers) {
+        const targetWeight = clamp(
+          0.15 + activation * 0.55 + member.activityBias * 0.2 + sentiment * member.sentimentBias * 0.12,
+          0.05,
+          1
+        )
+        member.displayWeight += (targetWeight - member.displayWeight) * 0.09
+
+        const orbitBase = radius + 8 + member.orbit * (isSelected ? (22 + 52 * swarmProgress) : (12 + 26 * swarmProgress))
+        const phase = member.angle + member.phase + t * swirlSpeed * (0.4 + member.activityBias)
+        const sx = x + Math.cos(phase) * orbitBase
+        const sy = y + Math.sin(phase) * orbitBase
+        const dotSize = (0.9 + member.sizeSeed * 2.1 + member.displayWeight * 1.4) * (0.62 + swarmProgress)
+        const dotAlpha = 0.28 + member.displayWeight * 0.5 * swarmProgress
+
+        ctx.beginPath()
+        ctx.arc(sx, sy, dotSize, 0, Math.PI * 2)
+        ctx.fillStyle = withAlpha(color, dotAlpha)
+        ctx.fill()
+      }
+
+      if (isSelected && swarm.length > 0) {
+        ctx.font = '600 10px Inter, system-ui, sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'bottom'
+        ctx.fillStyle = 'rgba(148,163,184,0.9)'
+        ctx.fillText(`${swarm.length} micro-agents`, x, y - radius - 10)
+      }
+    }
+
     // Type badge inside node
     const badge = TYPE_LABELS[node.type] || ''
     if (badge && radius > 14) {
@@ -239,11 +447,12 @@ export default function GraphVisualization() {
       ctx.fillStyle = `rgba(255,255,255,${labelAlpha * Math.max(0.6, activation)})`
       ctx.fillText(label, x, ly)
     }
-  }, [selectedNodeId])
+  }, [selectedNodeId, activeActionNodeIds])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const nodePointerAreaPaint = useCallback((node: any, color: string, ctx: CanvasRenderingContext2D) => {
-    const r = 12 + (node.activation || 0.3) * 24
+    const activation = node.displayActivation ?? node.targetActivation ?? node.activation ?? 0.3
+    const r = BASE_NODE_RADIUS + activation * NODE_RADIUS_RANGE
     ctx.beginPath()
     ctx.arc(node.x || 0, node.y || 0, r + 6, 0, Math.PI * 2)
     ctx.fillStyle = color
@@ -273,7 +482,8 @@ export default function GraphVisualization() {
     const len = Math.sqrt(dx * dx + dy * dy)
     if (len < 40) return
 
-    const tRadius = 12 + (t.activation || 0.3) * 24
+    const targetActivation = t.displayActivation ?? t.targetActivation ?? t.activation ?? 0.3
+    const tRadius = BASE_NODE_RADIUS + targetActivation * NODE_RADIUS_RANGE
     const dist = tRadius + 6
     const ux = dx / len
     const uy = dy / len
@@ -299,6 +509,10 @@ export default function GraphVisualization() {
   const handleBackgroundClick = useCallback(() => {
     dispatch({ type: 'SELECT_NODE', nodeId: null })
   }, [dispatch])
+
+  const handleZoom = useCallback((transform: { k: number }) => {
+    zoomLevelRef.current = transform.k
+  }, [])
 
   return (
     <div ref={containerRef} className="w-full h-full bg-black relative">
@@ -330,15 +544,16 @@ export default function GraphVisualization() {
           linkCanvasObject={linkCanvasObject}
           onNodeClick={handleNodeClick}
           onBackgroundClick={handleBackgroundClick}
-          cooldownTicks={200}
-          d3AlphaDecay={0.015}
-          d3VelocityDecay={0.25}
+          onZoom={handleZoom}
+          cooldownTicks={120}
+          d3AlphaDecay={0.035}
+          d3VelocityDecay={0.45}
           d3AlphaMin={0.001}
           enableZoomInteraction={true}
           enablePanInteraction={true}
           minZoom={0.3}
           maxZoom={8}
-          warmupTicks={100}
+          warmupTicks={0}
         />
       ) : (
         <div className="absolute inset-0 flex items-center justify-center">

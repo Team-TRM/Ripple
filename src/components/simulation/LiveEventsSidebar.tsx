@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useMemo } from 'react'
 import { useSimulation } from './SimulationContext'
 
 const TYPE_STYLES: Record<string, { border: string; label: string; labelColor: string; bg?: string }> = {
@@ -9,19 +9,24 @@ const TYPE_STYLES: Record<string, { border: string; label: string; labelColor: s
   official: { border: 'border-l-indigo-500', label: 'OFFICIAL', labelColor: 'text-indigo-400', bg: 'bg-indigo-950/20' },
   forum: { border: 'border-l-emerald-500', label: 'FORUM', labelColor: 'text-emerald-400' },
   secondary: { border: 'border-l-amber-500', label: 'EVENT', labelColor: 'text-amber-400' },
+  agent_action: { border: 'border-l-cyan-500', label: 'AGENT', labelColor: 'text-cyan-300', bg: 'bg-cyan-950/20' },
   comment: { border: 'border-l-gray-600', label: 'REPLY', labelColor: 'text-gray-500' },
   decision: { border: 'border-l-yellow-500', label: 'DECISION', labelColor: 'text-yellow-400', bg: 'bg-yellow-950/20' },
 }
 
 export default function LiveEventsSidebar() {
   const { messages, timelineEvents, currentDay } = useSimulation()
+  const visibleMessages = useMemo(
+    () => messages.filter((m) => m.type !== 'agent_action'),
+    [messages]
+  )
   const scrollRef = useRef<HTMLDivElement>(null)
   const [animatedIds, setAnimatedIds] = useState<Set<string>>(new Set())
   const prevIdsRef = useRef<Set<string>>(new Set())
 
   // Track which messages are new for animation
   useEffect(() => {
-    const currentIds = new Set(messages.map((m) => m.id))
+    const currentIds = new Set(visibleMessages.map((m) => m.id))
     const newIds = new Set<string>()
     for (const id of currentIds) {
       if (!prevIdsRef.current.has(id)) {
@@ -29,25 +34,32 @@ export default function LiveEventsSidebar() {
       }
     }
     if (newIds.size > 0) {
-      setAnimatedIds((prev) => new Set([...prev, ...newIds]))
+      prevIdsRef.current = currentIds
+      const addTimer = setTimeout(() => {
+        setAnimatedIds((prev) => new Set([...prev, ...newIds]))
+      }, 0)
       // Remove animation class after animation completes
-      setTimeout(() => {
+      const removeTimer = setTimeout(() => {
         setAnimatedIds((prev) => {
           const next = new Set(prev)
           for (const id of newIds) next.delete(id)
           return next
         })
       }, 600)
+      return () => {
+        clearTimeout(addTimer)
+        clearTimeout(removeTimer)
+      }
     }
     prevIdsRef.current = currentIds
-  }, [messages])
+  }, [visibleMessages])
 
   // Auto-scroll to top when new messages arrive (latest first)
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0
     }
-  }, [messages.length])
+  }, [visibleMessages.length])
 
   return (
     <div className="w-72 bg-black/60 border-r border-gray-800/50 flex flex-col backdrop-blur-sm">
@@ -55,21 +67,21 @@ export default function LiveEventsSidebar() {
         <h2 className="text-[10px] text-gray-500 uppercase tracking-wider font-semibold">
           Live Events
         </h2>
-        {messages.length > 0 && (
-          <span className="text-[10px] text-gray-600 font-mono">{messages.length}</span>
+        {visibleMessages.length > 0 && (
+          <span className="text-[10px] text-gray-600 font-mono">{visibleMessages.length}</span>
         )}
       </div>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
+        {visibleMessages.length === 0 ? (
           <div className="p-4 text-xs text-gray-600 text-center">
             Events will appear here as the simulation runs...
           </div>
         ) : (
           <div className="divide-y divide-gray-800/30">
-            {messages.map((msg, i) => {
+            {visibleMessages.map((msg, i) => {
               const style = TYPE_STYLES[msg.type] || TYPE_STYLES.comment
-              const prevMsg = i > 0 ? messages[i - 1] : null
+              const prevMsg = i > 0 ? visibleMessages[i - 1] : null
               const showTimestamp = !prevMsg || prevMsg.timestamp !== msg.timestamp
               const isNew = animatedIds.has(msg.id)
 

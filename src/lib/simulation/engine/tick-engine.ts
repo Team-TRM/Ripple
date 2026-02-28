@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/prisma'
 import { Prisma } from '@/generated/prisma/client'
 import { generateEnhancedTick } from '@/lib/agents/orchestrator/tick-orchestrator'
+import { runAutonomousAgentLoop } from '@/lib/agents/orchestrator/autonomous-agent-loop'
 import { generateExecutiveAdvice } from '@/lib/agents/executives/advisory/generate-advice'
 import {
   getProjectGraph,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/simulation/engine/graph-engine'
 import { calculatePopulationStats } from '@/lib/agents/cohorts/population/population-dynamics'
 import { getSpeakerMemory } from '@/lib/agents/speakers/memory/recall'
+import type { AgentActionLog } from '@/lib/agents/tools/simulation-tools'
 import type { GraphNode, GraphEdge } from '@/lib/types'
 import type { SpeakerProfile, ExecutiveRecommendation, PopulationStats } from '@/lib/ai/schemas'
 
@@ -45,8 +47,19 @@ export type TickResult = {
     prompt: string
     options: string[]
   }
+  agentActions?: AgentActionLog[]
   executiveRecommendations?: ExecutiveRecommendation[]
   populationStats?: PopulationStats[]
+}
+
+type TickHealthDeltas = {
+  overallDelta: number
+  publicSentimentDelta: number
+  mediaHeatDelta: number
+  regulatoryPressureDelta: number
+  internalStabilityDelta: number
+  fraudRiskDelta: number
+  publicAwarenessDelta: number
 }
 
 function getNextTickIndex(currentTickIndex: number, currentDay: number) {
@@ -54,6 +67,25 @@ function getNextTickIndex(currentTickIndex: number, currentDay: number) {
     return { dayNumber: currentDay, tickIndex: currentTickIndex + 1 }
   }
   return { dayNumber: currentDay + 1, tickIndex: 0 }
+}
+
+function mergeTickHealthDeltas(
+  base: Partial<TickHealthDeltas> | undefined,
+  extra: TickHealthDeltas
+): TickHealthDeltas | undefined {
+  const merged: TickHealthDeltas = {
+    overallDelta: (base?.overallDelta ?? 0) + extra.overallDelta,
+    publicSentimentDelta: (base?.publicSentimentDelta ?? 0) + extra.publicSentimentDelta,
+    mediaHeatDelta: (base?.mediaHeatDelta ?? 0) + extra.mediaHeatDelta,
+    regulatoryPressureDelta: (base?.regulatoryPressureDelta ?? 0) + extra.regulatoryPressureDelta,
+    internalStabilityDelta: (base?.internalStabilityDelta ?? 0) + extra.internalStabilityDelta,
+    fraudRiskDelta: (base?.fraudRiskDelta ?? 0) + extra.fraudRiskDelta,
+    publicAwarenessDelta: (base?.publicAwarenessDelta ?? 0) + extra.publicAwarenessDelta,
+  }
+
+  const hasAnyDelta = Object.values(merged).some((v) => v !== 0)
+  if (!base && !hasAnyDelta) return undefined
+  return merged
 }
 
 /**
@@ -190,10 +222,38 @@ async function generateAndStoreTick(
     populationStats: previousPopulation.length > 0 ? previousPopulation : undefined,
   })
 
-  // Apply all graph mutations in one read-modify-write cycle
-  const { nodes: updatedNodes, edges: updatedEdges } = await processTickUpdates(
-    projectId,
-    tickData.cohortUpdates.map((u) => ({
+  // Autonomous per-agent planning loop (safe additive layer).
+  // If anything fails, simulation continues on the standard orchestrator path.
+  const autonomousResult = await runAutonomousAgentLoop({
+    crisisContext: project.context,
+    dayNumber,
+    tickIndex,
+    nodes: graphData.nodes,
+    edges: graphData.edges,
+    healthScores: currentHealth,
+    recentMessages,
+    lastDecision: lastDecisionText,
+    maxAgents: 4,
+  }).catch((err) => {
+    console.error('[tick-engine] Autonomous loop failed (fallback to base pipeline):', err)
+    return {
+      nodeUpdates: [],
+      healthDeltas: {
+        overallDelta: 0,
+        publicSentimentDelta: 0,
+        mediaHeatDelta: 0,
+        regulatoryPressureDelta: 0,
+        internalStabilityDelta: 0,
+        fraudRiskDelta: 0,
+        publicAwarenessDelta: 0,
+      },
+      messages: [],
+      agentActions: [],
+    }
+  })
+
+  const mergedCohortUpdates = [
+    ...tickData.cohortUpdates.map((u) => ({
       cohortName: u.cohortName,
       sentimentDelta: u.sentimentDelta,
       activationDelta: u.activationDelta,
@@ -201,12 +261,28 @@ async function generateAndStoreTick(
       dominantNarrative: u.dominantNarrative,
       behaviours: u.behaviours,
     })),
+    ...autonomousResult.nodeUpdates.map((u) => ({
+      nodeId: u.nodeId,
+      sentimentDelta: u.sentimentDelta,
+      activationDelta: u.activationDelta,
+      trustDelta: u.trustDelta,
+      dominantNarrative: u.dominantNarrative,
+      behaviours: u.behaviours,
+    })),
+  ]
+
+  const combinedMessages = [...tickData.messages, ...autonomousResult.messages]
+
+  // Apply all graph mutations in one read-modify-write cycle
+  const { nodes: updatedNodes, edges: updatedEdges } = await processTickUpdates(
+    projectId,
+    mergedCohortUpdates,
     tickData.newNodes,
   )
 
   // Compute health scores: LLM deltas applied to current scores (primary driver)
   const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)))
-  const hd = tickData.healthDeltas
+  const hd = mergeTickHealthDeltas(tickData.healthDeltas as Partial<TickHealthDeltas> | undefined, autonomousResult.healthDeltas)
 
   const healthScores = hd
     ? {
@@ -256,6 +332,7 @@ async function generateAndStoreTick(
       nodes: updatedNodes,
       healthScores,
       decisionPrompt: existingDp ? { prompt: existingDp.prompt, options: existingDp.options as string[] } : undefined,
+      agentActions: [],
     }
   }
 
@@ -265,9 +342,9 @@ async function generateAndStoreTick(
     generateTick = await prisma.tick.create({
       data: {
         projectId, dayNumber, tickIndex, subTickIndex: 0, dateLabel,
-        messages: tickData.messages.length > 0
+        messages: combinedMessages.length > 0
           ? {
-              create: tickData.messages.map((m) => ({
+              create: combinedMessages.map((m) => ({
                 type: m.type, author: m.author, content: m.content,
                 reach: m.reach, sentiment: m.sentiment,
               })),
@@ -310,6 +387,7 @@ async function generateAndStoreTick(
           nodes: updatedNodes,
           healthScores,
           decisionPrompt: tickData.decisionPrompt,
+          agentActions: [],
         }
       }
     }
@@ -434,6 +512,7 @@ async function generateAndStoreTick(
     edges: updatedEdges,
     healthScores,
     decisionPrompt: tickData.decisionPrompt,
+    agentActions: autonomousResult.agentActions,
     executiveRecommendations,
     populationStats,
   }

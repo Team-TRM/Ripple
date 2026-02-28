@@ -62,6 +62,8 @@ Ripple is a perception-driven crisis simulation platform. It models how a corpor
 
 The LLM produces narrative content (messages, cohort summaries, decision prompts) but never directly mutates simulation state. All state changes flow through the deterministic graph engine, which bounds deltas and enforces invariants.
 
+Additionally, top active stakeholders run an autonomous plan → tool → execute loop each tick. Their tool outputs are merged into bounded state updates before graph propagation.
+
 ### 2. Single Read-Modify-Write for Graph
 
 `processTickUpdates()` loads the entire graph once, applies all mutations in-memory (cohort deltas → influence propagation → activation decay), then writes once. This prevents partial updates and race conditions.
@@ -103,6 +105,7 @@ Simulation Running (Play Loop)
     ↓
 ┌→ POST /api/projects/[id]/step
 │   ├→ generateEnhancedTick() [LLM] → messages, deltas, decisions
+│   ├→ runAutonomousAgentLoop() [parallel per-node plans + deterministic tools]
 │   ├→ processTickUpdates() → graph mutations
 │   ├→ Store Tick + Messages + Health + Snapshots
 │   └→ If evening: generateExecutiveAdvice() [LLM]

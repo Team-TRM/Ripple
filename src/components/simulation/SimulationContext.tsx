@@ -34,6 +34,29 @@ export type PopulationStats = {
   trendDirection: 'improving' | 'stable' | 'declining'
 }
 
+export type AgentAction = {
+  id: string
+  agentNodeId: string
+  agentLabel: string
+  tool: string
+  goal: string
+  impact: string
+  healthImpact: Partial<{
+    overallDelta: number
+    publicSentimentDelta: number
+    mediaHeatDelta: number
+    regulatoryPressureDelta: number
+    internalStabilityDelta: number
+    fraudRiskDelta: number
+    publicAwarenessDelta: number
+  }>
+  nodeImpact: {
+    sentimentDelta: number
+    activationDelta: number
+    trustDelta: number
+  }
+}
+
 export type TimelineEvent = {
   id: string
   dayNumber: number
@@ -76,6 +99,7 @@ export type SimState = {
   decisionPrompt: { prompt: string; options: string[] } | null
   executiveRecommendations: ExecutiveRecommendation[] | null
   populationStats: PopulationStats[]
+  agentActions: AgentAction[]
   isGenerating: boolean
   eventInputOpen: boolean
   pendingUserEvent: string | null
@@ -98,6 +122,7 @@ type SimAction =
   | { type: 'SHOW_DECISION'; prompt: string; options: string[]; executiveRecommendations?: ExecutiveRecommendation[] }
   | { type: 'DISMISS_DECISION' }
   | { type: 'SET_POPULATION_STATS'; stats: PopulationStats[] }
+  | { type: 'SET_AGENT_ACTIONS'; actions: AgentAction[] }
   | { type: 'UPDATE_NODES'; nodes: GraphNode[]; edges?: GraphEdge[] }
   | { type: 'SET_GENERATING'; isGenerating: boolean }
   | { type: 'ADD_TIMELINE_EVENT'; event: TimelineEvent }
@@ -147,6 +172,8 @@ function simReducer(state: SimState, action: SimAction): SimState {
       return { ...state, showDecisionDialog: false, decisionPrompt: null, executiveRecommendations: null }
     case 'SET_POPULATION_STATS':
       return { ...state, populationStats: action.stats }
+    case 'SET_AGENT_ACTIONS':
+      return { ...state, agentActions: action.actions }
     case 'UPDATE_NODES':
       return { ...state, nodes: action.nodes, ...(action.edges ? { edges: action.edges } : {}) }
     case 'SET_GENERATING':
@@ -205,7 +232,7 @@ export function SimulationProvider({
   initialTimelineEvents,
 }: {
   children: ReactNode
-  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'executiveRecommendations' | 'populationStats' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents' | 'showReport' | 'reportData' | 'isLoadingReport' | 'previousReport' | 'rerunFromDay' | 'isRerunning'>
+  initialState: Omit<SimState, 'messages' | 'selectedNodeId' | 'showDecisionDialog' | 'decisionPrompt' | 'executiveRecommendations' | 'populationStats' | 'agentActions' | 'isPlaying' | 'isGenerating' | 'eventInputOpen' | 'pendingUserEvent' | 'timelineEvents' | 'showReport' | 'reportData' | 'isLoadingReport' | 'previousReport' | 'rerunFromDay' | 'isRerunning'>
   initialTimelineEvents?: TimelineEvent[]
 }) {
   const [state, dispatch] = useReducer(simReducer, {
@@ -217,6 +244,7 @@ export function SimulationProvider({
     decisionPrompt: null,
     executiveRecommendations: null,
     populationStats: [],
+    agentActions: [],
     isPlaying: false,
     isGenerating: false,
     eventInputOpen: false,

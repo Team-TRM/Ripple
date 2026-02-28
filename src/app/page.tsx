@@ -28,7 +28,10 @@ export default function HomePage() {
   }
 
   useEffect(() => {
-    fetchProjects()
+    const timer = setTimeout(() => {
+      fetchProjects()
+    }, 0)
+    return () => clearTimeout(timer)
   }, [])
 
   return (

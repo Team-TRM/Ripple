@@ -88,6 +88,7 @@ Each day has 3 ticks (morning, afternoon, evening) with 3 processing phases each
 
 - **Graph-based influence propagation** — stakeholder sentiment spreads along weighted edges
 - **Multi-agent speaker system** — 15-25 named individuals with memory and personality consistency
+- **Autonomous actor loop** — top active nodes independently plan and execute tool actions each tick
 - **Executive advisory board** — CTO, PR, Legal, and Operations give context-specific recommendations
 - **Crisis injection** — inject breaking crises mid-simulation and watch them propagate
 - **Rerun from decision point** — branch from any decision, make a different choice, compare outcomes (grade comparison: "D → B")

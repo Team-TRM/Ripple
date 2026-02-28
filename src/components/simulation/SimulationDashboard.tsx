@@ -276,6 +276,10 @@ function DashboardInner({ projectId }: { projectId: string }) {
       if (data.healthScores) {
         dispatch({ type: 'SET_HEALTH', scores: data.healthScores })
       }
+      dispatch({
+        type: 'SET_AGENT_ACTIONS',
+        actions: Array.isArray(data.agentActions) ? data.agentActions : [],
+      })
 
       // Push messages to queue — drain loop displays them one by one independently
       // Truncate old undisplayed messages to max 3 so events stay in sync with the day counter
@@ -441,7 +445,7 @@ function DashboardInner({ projectId }: { projectId: string }) {
         wakeRef.current = null
       }
     }
-  }, [isPlaying, stepOnce, triggerReport])
+  }, [isPlaying, stepOnce, triggerReport, dispatch])
 
   // Clean up drain timer on unmount
   useEffect(() => {
