@@ -127,6 +127,7 @@ type EnhancedTickInput = {
   userEvent?: string
   speakerProfiles?: SpeakerProfile[]
   nodeLabels?: string[]
+  breakingDevelopments?: string[]
 }
 
 export async function generateEnhancedTick(input: EnhancedTickInput): Promise<EnhancedTickResponse> {
@@ -172,6 +173,12 @@ This is a MAJOR breaking event. Your response MUST follow this structure:
     ? `\nExisting graph nodes (use these labels for connectTo): ${input.nodeLabels.join(', ')}`
     : ''
 
+  const breakingBlock = input.breakingDevelopments?.length
+    ? `\n**⚠️ TODAY'S BREAKING DEVELOPMENTS** (these are the most critical events that happened today — the evening decision MUST address these):
+${input.breakingDevelopments.map((d) => `- ${d}`).join('\n')}
+The decisionPrompt MUST be directly about responding to these breaking developments. Do NOT generate a generic daily summary — the CEO needs to decide how to handle THIS specific crisis escalation.`
+    : ''
+
   const userPrompt = `Crisis: ${input.crisisContext}
 
 Day ${input.dayNumber}, ${period} tick (tickIndex=${input.tickIndex})
@@ -189,6 +196,7 @@ ${healthBlock}
 ${speakerBlock}
 ${nodeLabelsBlock}
 ${userEventBlock}
+${breakingBlock}
 
 Generate media content and cohort updates for this ${period.toLowerCase()} tick.`
 

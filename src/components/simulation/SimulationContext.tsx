@@ -134,8 +134,11 @@ function simReducer(state: SimState, action: SimAction): SimState {
       return { ...state, nodes: action.nodes, edges: action.edges }
     case 'SET_HEALTH':
       return { ...state, healthScores: action.scores }
-    case 'ADD_MESSAGES':
-      return { ...state, messages: [...action.messages, ...state.messages].slice(0, 50) }
+    case 'ADD_MESSAGES': {
+      const existingIds = new Set(state.messages.map((m) => m.id))
+      const newMsgs = action.messages.filter((m) => !existingIds.has(m.id))
+      return { ...state, messages: [...newMsgs, ...state.messages].slice(0, 50) }
+    }
     case 'ADVANCE_TICK':
       return {
         ...state,

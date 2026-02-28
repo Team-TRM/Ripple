@@ -74,7 +74,7 @@ function SimulatingOverlay() {
 }
 
 function DashboardInner({ projectId }: { projectId: string }) {
-  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex, isGenerating, simulationDays } = useSimulation()
+  const { isPlaying, pendingUserEvent, currentDay, currentTickIndex, isGenerating, simulationDays, edges } = useSimulation()
   const dispatch = useSimulationDispatch()
   const playingRef = useRef(false)
   const steppingRef = useRef(false)
@@ -447,9 +447,20 @@ function DashboardInner({ projectId }: { projectId: string }) {
       <div className="flex-1 flex min-h-0">
         <LiveEventsSidebar />
         <div className="flex-1 relative">
-          <GraphVisualization />
-          <NodeDetailDialog />
-          {isGenerating && <SimulatingOverlay />}
+          {edges.length > 0 ? (
+            <>
+              <GraphVisualization />
+              <NodeDetailDialog />
+            </>
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="flex flex-col items-center gap-4">
+                <span className="w-8 h-8 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin" />
+                <span className="text-sm text-gray-500">Initializing simulation...</span>
+              </div>
+            </div>
+          )}
+          {isGenerating && edges.length > 0 && <SimulatingOverlay />}
         </div>
         <MetricsSidebar />
       </div>

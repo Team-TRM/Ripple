@@ -109,13 +109,22 @@ async function generateAndStoreTick(
   // Phase 1: GENERATE (LLM call)
   // For evening ticks, load ALL messages from today so the decision reflects any crisis injected earlier
   let recentMessages: string[]
+  let breakingDevelopments: string[] | undefined
   if (tickIndex === 2) {
     const todaysMessages = await prisma.message.findMany({
       where: { tick: { projectId, dayNumber } },
       orderBy: { id: 'asc' },
-      take: 15,
+      take: 20,
     })
     recentMessages = todaysMessages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`)
+
+    // Identify high-impact crisis messages (high reach + negative sentiment = breaking news)
+    const crisisMessages = todaysMessages.filter(
+      (m) => (m.reach >= 0.6 && m.sentiment <= -0.3) || m.content.toUpperCase().includes('BREAKING')
+    )
+    if (crisisMessages.length > 0) {
+      breakingDevelopments = crisisMessages.map((m) => `${m.author}: ${m.content.slice(0, 150)}`)
+    }
   } else {
     recentMessages = lastTick?.messages.map((m) => `[${m.type}] ${m.author}: ${m.content.slice(0, 100)}`) || []
   }
@@ -162,6 +171,7 @@ async function generateAndStoreTick(
     userEvent,
     speakerProfiles: speakerProfiles.length > 0 ? speakerProfiles : undefined,
     nodeLabels: graphData.nodes.map((n) => n.label),
+    breakingDevelopments,
   })
 
   // Apply all graph mutations in one read-modify-write cycle
@@ -360,7 +370,10 @@ async function generateAndStoreTick(
   let executiveRecommendations: ExecutiveRecommendation[] | undefined
   if (tickData.decisionPrompt) {
     try {
-      const recentContext = recentMessages.slice(0, 3).join('; ')
+      // Use breaking developments if available, otherwise fall back to recent messages
+      const recentContext = breakingDevelopments?.length
+        ? `TODAY'S BREAKING DEVELOPMENTS:\n${breakingDevelopments.join('\n')}`
+        : recentMessages.slice(0, 8).join('; ')
       const execAdvice = await generateExecutiveAdvice({
         crisisContext: project.context,
         decisionPrompt: tickData.decisionPrompt.prompt,
