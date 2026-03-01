@@ -11,44 +11,56 @@
 
 import type { GraphNode, GraphEdge } from '@/lib/types'
 
+const MAX_PASSES = 5
+const CONVERGENCE_THRESHOLD = 0.01
+
 /**
- * Propagate influence along graph edges in a single pass.
- * Active source nodes influence target node sentiment and activation
- * based on edge weights and source activation levels.
+ * Propagate influence along graph edges with multi-pass convergence.
+ * Runs up to MAX_PASSES iterations, stopping early when the maximum
+ * absolute delta across all nodes falls below CONVERGENCE_THRESHOLD.
+ * This allows multi-hop cascades (A→B→C) to resolve within a single tick.
  */
 export function applyInfluencePropagation(nodes: GraphNode[], edges: GraphEdge[]): void {
-  const incoming = new Map<string, { source: GraphNode; weight: number }[]>()
-  for (const edge of edges) {
-    const sourceNode = nodes.find((n) => n.nodeId === edge.source)
-    if (!sourceNode || sourceNode.activation <= 0.2) continue
-    if (!incoming.has(edge.target)) incoming.set(edge.target, [])
-    incoming.get(edge.target)!.push({ source: sourceNode, weight: edge.weight })
-  }
-
-  for (const node of nodes) {
-    const influences = incoming.get(node.nodeId)
-    if (!influences || influences.length === 0) continue
-
-    let sentWeightedSum = 0
-    let actWeightedSum = 0
-    let totalWeight = 0
-
-    for (const { source, weight } of influences) {
-      sentWeightedSum += source.sentiment * weight * source.activation
-      actWeightedSum += source.activation * weight
-      totalWeight += weight
+  for (let pass = 0; pass < MAX_PASSES; pass++) {
+    const incoming = new Map<string, { source: GraphNode; weight: number }[]>()
+    for (const edge of edges) {
+      const sourceNode = nodes.find((n) => n.nodeId === edge.source)
+      if (!sourceNode || sourceNode.activation <= 0.2) continue
+      if (!incoming.has(edge.target)) incoming.set(edge.target, [])
+      incoming.get(edge.target)!.push({ source: sourceNode, weight: edge.weight })
     }
 
-    if (totalWeight === 0) continue
+    let maxDelta = 0
 
-    const influencedSentiment = sentWeightedSum / totalWeight
-    const influencedActivation = actWeightedSum / totalWeight
+    for (const node of nodes) {
+      const influences = incoming.get(node.nodeId)
+      if (!influences || influences.length === 0) continue
 
-    const sentDelta = Math.max(-0.15, Math.min(0.15, influencedSentiment - node.sentiment))
-    const actDelta = Math.max(-0.1, Math.min(0.1, influencedActivation - node.activation))
+      let sentWeightedSum = 0
+      let actWeightedSum = 0
+      let totalWeight = 0
 
-    node.sentiment = Math.max(-1, Math.min(1, node.sentiment + sentDelta))
-    node.activation = Math.max(0, Math.min(1, node.activation + actDelta))
+      for (const { source, weight } of influences) {
+        sentWeightedSum += source.sentiment * weight * source.activation
+        actWeightedSum += source.activation * weight
+        totalWeight += weight
+      }
+
+      if (totalWeight === 0) continue
+
+      const influencedSentiment = sentWeightedSum / totalWeight
+      const influencedActivation = actWeightedSum / totalWeight
+
+      const sentDelta = Math.max(-0.15, Math.min(0.15, influencedSentiment - node.sentiment))
+      const actDelta = Math.max(-0.1, Math.min(0.1, influencedActivation - node.activation))
+
+      maxDelta = Math.max(maxDelta, Math.abs(sentDelta), Math.abs(actDelta))
+
+      node.sentiment = Math.max(-1, Math.min(1, node.sentiment + sentDelta))
+      node.activation = Math.max(0, Math.min(1, node.activation + actDelta))
+    }
+
+    if (maxDelta < CONVERGENCE_THRESHOLD) break
   }
 }
 

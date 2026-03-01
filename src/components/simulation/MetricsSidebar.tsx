@@ -124,6 +124,21 @@ export default function MetricsSidebar() {
             </span>
           )}
         </div>
+        {/* Confidence band bar from stochastic ensemble */}
+        {(() => {
+          const c = healthScores.overall >= 60 ? '#4ADE80' : healthScores.overall >= 35 ? '#FACC15' : '#F87171'
+          const { overallMin: oMin, overallMax: oMax } = healthScores
+          return oMin !== undefined && oMax !== undefined ? (
+            <div className="mt-2 h-1.5 bg-gray-800 rounded-full overflow-hidden relative">
+              <div className="absolute h-full" style={{ left: `${oMin}%`, width: `${oMax - oMin}%`, backgroundColor: c, opacity: 0.25 }} />
+              <div className="h-full rounded-full transition-all duration-700 ease-out" style={{ width: `${healthScores.overall}%`, backgroundColor: c }} />
+            </div>
+          ) : (
+            <div className="mt-2 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-700 ease-out" style={{ width: `${healthScores.overall}%`, backgroundColor: c }} />
+            </div>
+          )
+        })()}
       </div>
 
       {/* Metric Bars */}

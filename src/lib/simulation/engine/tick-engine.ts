@@ -14,7 +14,7 @@ import { calculatePopulationStats } from '@/lib/agents/cohorts/population/popula
 import { getSpeakerMemory } from '@/lib/agents/speakers/memory/recall'
 import type { AgentActionLog } from '@/lib/agents/tools/simulation-tools'
 import type { GraphNode, GraphEdge } from '@/lib/types'
-import type { SpeakerProfile, ExecutiveRecommendation, PopulationStats } from '@/lib/ai/schemas'
+import type { SpeakerProfile, ExecutiveRecommendation, PopulationStats, EnhancedTickResponse } from '@/lib/ai/schemas'
 
 export type TickResult = {
   tick: {
@@ -42,6 +42,8 @@ export type TickResult = {
     internalStability: number
     fraudRisk: number
     publicAwareness: number
+    overallMin?: number
+    overallMax?: number
   }
   decisionPrompt?: {
     prompt: string
@@ -205,7 +207,7 @@ async function generateAndStoreTick(
       ? `In response to "${resolvedDecision.prompt}", the company decided: "${resolvedDecision.chosenOption}"`
       : undefined
 
-  const tickData = await generateEnhancedTick({
+  const tickInput = {
     crisisContext: project.context,
     dayNumber,
     tickIndex,
@@ -220,7 +222,15 @@ async function generateAndStoreTick(
     nodeLabels: graphData.nodes.map((n) => n.label),
     breakingDevelopments,
     populationStats: previousPopulation.length > 0 ? previousPopulation : undefined,
-  })
+  }
+
+  // Run 3 LLM calls in parallel (stochastic ensemble) — average deltas, track range
+  const [tickData, tickAlt1, tickAlt2] = await Promise.all([
+    generateEnhancedTick(tickInput),
+    generateEnhancedTick(tickInput),
+    generateEnhancedTick(tickInput),
+  ])
+  const allTickRuns: EnhancedTickResponse[] = [tickData, tickAlt1, tickAlt2]
 
   // Autonomous per-agent planning loop (safe additive layer).
   // If anything fails, simulation continues on the standard orchestrator path.
@@ -252,15 +262,22 @@ async function generateAndStoreTick(
     }
   })
 
-  const mergedCohortUpdates = [
-    ...tickData.cohortUpdates.map((u) => ({
+  // Average cohort deltas across the 3 parallel runs
+  const avgCohortUpdates = tickData.cohortUpdates.map((u) => {
+    const matching = allTickRuns.map((r) => r.cohortUpdates.find((c) => c.cohortName === u.cohortName)).filter(Boolean)
+    const n = matching.length
+    return {
       cohortName: u.cohortName,
-      sentimentDelta: u.sentimentDelta,
-      activationDelta: u.activationDelta,
-      trustDelta: u.trustDelta,
+      sentimentDelta: matching.reduce((s, c) => s + c!.sentimentDelta, 0) / n,
+      activationDelta: matching.reduce((s, c) => s + c!.activationDelta, 0) / n,
+      trustDelta: matching.reduce((s, c) => s + (c!.trustDelta ?? 0), 0) / n,
       dominantNarrative: u.dominantNarrative,
       behaviours: u.behaviours,
-    })),
+    }
+  })
+
+  const mergedCohortUpdates = [
+    ...avgCohortUpdates,
     ...autonomousResult.nodeUpdates.map((u) => ({
       nodeId: u.nodeId,
       sentimentDelta: u.sentimentDelta,
@@ -280,9 +297,27 @@ async function generateAndStoreTick(
     tickData.newNodes,
   )
 
-  // Compute health scores: LLM deltas applied to current scores (primary driver)
+  // Average health deltas across the 3 runs, then merge with autonomous result
   const clamp = (v: number) => Math.max(0, Math.min(100, Math.round(v)))
-  const hd = mergeTickHealthDeltas(tickData.healthDeltas as Partial<TickHealthDeltas> | undefined, autonomousResult.healthDeltas)
+  const validHDs = allTickRuns.map((r) => r.healthDeltas).filter(Boolean)
+  const avgHD = validHDs.length > 0
+    ? {
+        overallDelta: validHDs.reduce((s, h) => s + h!.overallDelta, 0) / validHDs.length,
+        publicSentimentDelta: validHDs.reduce((s, h) => s + h!.publicSentimentDelta, 0) / validHDs.length,
+        mediaHeatDelta: validHDs.reduce((s, h) => s + h!.mediaHeatDelta, 0) / validHDs.length,
+        regulatoryPressureDelta: validHDs.reduce((s, h) => s + h!.regulatoryPressureDelta, 0) / validHDs.length,
+        internalStabilityDelta: validHDs.reduce((s, h) => s + h!.internalStabilityDelta, 0) / validHDs.length,
+        fraudRiskDelta: validHDs.reduce((s, h) => s + h!.fraudRiskDelta, 0) / validHDs.length,
+        publicAwarenessDelta: validHDs.reduce((s, h) => s + (h!.publicAwarenessDelta ?? 0), 0) / validHDs.length,
+      }
+    : undefined
+
+  const hd = mergeTickHealthDeltas(avgHD as Partial<TickHealthDeltas> | undefined, autonomousResult.healthDeltas)
+
+  // Compute per-run overall to derive overallMin/overallMax for confidence band
+  const overallPerRun = allTickRuns.map((r) =>
+    r.healthDeltas ? clamp(currentHealth.overall + r.healthDeltas.overallDelta) : null
+  ).filter((v): v is number => v !== null)
 
   const healthScores = hd
     ? {
@@ -293,6 +328,10 @@ async function generateAndStoreTick(
         internalStability: clamp(currentHealth.internalStability + hd.internalStabilityDelta),
         fraudRisk: clamp(currentHealth.fraudRisk + hd.fraudRiskDelta),
         publicAwareness: clamp((currentHealth.publicAwareness ?? 10) + (hd.publicAwarenessDelta ?? 0)),
+        ...(overallPerRun.length > 1 && {
+          overallMin: Math.min(...overallPerRun),
+          overallMax: Math.max(...overallPerRun),
+        }),
       }
     : calculateHealthScoresFromNodes(updatedNodes)
 
