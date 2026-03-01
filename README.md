@@ -1,109 +1,121 @@
-# Ripple — Crisis Simulator
+# Ripple - Crisis Simulation Engine
 
-Perception-driven crisis simulation platform. Simulate how a corporate crisis unfolds across media, public, and institutional actors using AI-powered graph-based influence propagation. Play as the CEO — make strategic decisions at key moments and see how your choices ripple through stakeholder networks.
+Ripple is a multi-agent crisis simulation platform that helps teams test high-stakes decisions before making them in the real world.
 
-## Prerequisites
+Given a crisis scenario, Ripple builds a structured world model (stakeholders, timeline, influence graph), runs the simulation tick-by-tick, pauses for leadership decisions, and produces a post-mortem with recommended mitigations.
 
-- Node.js 18+
-- Docker & Docker Compose
-- Mistral AI API key
+## Why This Is Technically Strong
 
-## Setup
+- Multi-agent runtime, not one-shot prompting:
+  - per-tick orchestrator generation
+  - independent per-actor planning loop for top active nodes
+  - deterministic tool execution with bounded deltas
+- Memory and continuity:
+  - speaker memory from persisted historical messages
+  - graph snapshots per tick for branch-and-rerun from prior decisions
+- Hybrid simulation model:
+  - LLMs generate narrative proposals
+  - deterministic graph and health engine governs state transitions
+- Stochastic robustness:
+  - 3 parallel tick generations per step
+  - averaged deltas with confidence band (`overallMin`, `overallMax`)
+- Human-in-the-loop control:
+  - end-of-day decision gating
+  - event injection during runtime
+  - rerun with adjusted decisions
 
-### 1. Environment variables
+## Core Product Flow
+
+1. Create simulation from a crisis description.
+2. Ripple asks targeted clarifying questions.
+3. Setup is generated (summary, cohorts, timeline) and can be edited.
+4. Confirm starts runtime build (initial tick, graph, speakers, population stats).
+5. Simulation runs in Morning/Afternoon/Evening ticks.
+6. Leadership decisions are requested on evening ticks.
+7. End report explains outcomes, turning points, and recommendations.
+8. Rerun from a prior decision branch to compare outcomes.
+
+## Architecture Snapshot
+
+```text
+Next.js Frontend (React + App Router)
+  -> Route Handlers (/api/projects/*)
+    -> Simulation Engine
+       - Tick Engine (orchestration)
+       - Autonomous Agent Loop (plan -> tool -> execute)
+       - Graph Engine (influence propagation + decay)
+       - Health Engine (derived + bounded blended scoring)
+       - Report Generator
+    -> PostgreSQL (Prisma)
+    -> Mistral API (large for setup, small for runtime)
+```
+
+## Stack
+
+- Next.js 16, React 19, TypeScript
+- PostgreSQL + Prisma ORM
+- Mistral AI (`mistral-large-latest`, `mistral-small-latest`)
+- `react-force-graph-2d`
+- Tailwind CSS
+- Zod output schemas for structured LLM IO
+
+## Quick Start
+
+### 1) Configure environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and add your Mistral API key:
+Set:
 
-```
+```bash
 MISTRAL_API_KEY=your_key_here
+DATABASE_URL=postgresql://...
 ```
 
-### 2. Start database
+### 2) Start database
 
 ```bash
 docker compose up -d
 ```
 
-This starts PostgreSQL on port 5432.
-
-### 3. Install dependencies
+### 3) Install dependencies
 
 ```bash
 npm install
 ```
 
-### 4. Run database migrations
+### 4) Sync schema
 
 ```bash
 npx prisma db push
 ```
 
-### 5. Start the dev server
+### 5) Run app
 
 ```bash
 npm run dev
 ```
 
-App runs at http://localhost:3000
+App: `http://localhost:3000`
 
-## Architecture
+## Key Capabilities
 
-```
-Frontend (React 19 + Next.js 16)
-    ↕ REST API (Route Handlers)
-Simulation Engine
-    ├── Tick Engine (orchestration)
-    ├── Graph Engine (influence propagation)
-    ├── Multi-Agent System
-    │   ├── 15-25 Speaker Agents (named individuals)
-    │   ├── 4 Cohort Agents (stakeholder groups)
-    │   └── 4 Executive Agents (C-suite advisors)
-    └── Health Calculator (7-dimension scoring)
-    ↕
-Mistral AI (content generation + analysis)
-    ↕
-PostgreSQL + Prisma ORM (all state)
-```
-
-### Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Framework | Next.js 16, React 19, TypeScript | Full-stack App Router |
-| Database | PostgreSQL + Prisma | All data including graph state as JSON |
-| AI | Mistral AI (small + large models) | Content generation, analysis, decisions |
-| Graph | react-force-graph-2d | Force-directed influence graph visualization |
-| Styling | Tailwind CSS | Dark theme, Plague Inc. aesthetic |
-| Validation | Zod | LLM output validation with resilient parsing |
-
-### Simulation Model
-
-Each day has 3 ticks (morning, afternoon, evening) with 3 processing phases each. The LLM generates media content and stakeholder reactions, then the deterministic graph engine propagates influence along edges, applies activation decay, and recalculates health scores. Decision points appear in evening ticks with recommendations from 4 C-suite executives.
-
-### Key Features
-
-- **Graph-based influence propagation** — stakeholder sentiment spreads along weighted edges
-- **Multi-agent speaker system** — 15-25 named individuals with memory and personality consistency
-- **Autonomous actor loop** — top active nodes independently plan and execute tool actions each tick
-- **Executive advisory board** — CTO, PR, Legal, and Operations give context-specific recommendations
-- **Crisis injection** — inject breaking crises mid-simulation and watch them propagate
-- **Rerun from decision point** — branch from any decision, make a different choice, compare outcomes (grade comparison: "D → B")
-- **7-dimension health scoring** — public sentiment, media heat, regulatory pressure, internal stability, fraud risk, public awareness, overall
+- Graph-based stakeholder dynamics with influence edges.
+- Autonomous actor tool actions each tick (`publish_message`, `amplify_signal`, etc.).
+- Smooth node growth/shrink driven by activation and timeline progression.
+- Zoomed micro-agent swarm view for selected nodes.
+- URL grounding tool that ingests external article context into simulation state.
+- Executive advisory layer for decision prompts.
+- End-of-simulation report and rerun branching.
 
 ## Documentation
 
-Detailed documentation is in the [`documentation/`](documentation/) folder:
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](documentation/architecture.md) | System overview, data flow, design principles |
-| [Simulation Engine](documentation/simulation-engine.md) | Tick engine, graph engine, propagation, health scoring |
-| [API Reference](documentation/api-reference.md) | All REST endpoints with request/response shapes |
-| [Agent System](documentation/agent-system.md) | Speaker, cohort, and executive agent architecture |
-| [Frontend](documentation/frontend.md) | Dashboard components, state management, play loop |
-| [Database Schema](documentation/database-schema.md) | All Prisma models, JSON column schemas, indexes |
-| [Mistral AI Reference](documentation/mistral-ai-docs.md) | SDK usage, model selection, API parameters |
+- [System Architecture](documentation/architecture.md)
+- [Simulation Engine](documentation/simulation-engine.md)
+- [Agent System](documentation/agent-system.md)
+- [API Reference](documentation/api-reference.md)
+- [Frontend Architecture](documentation/frontend.md)
+- [Database Schema](documentation/database-schema.md)
+- [Mistral Integration](documentation/mistral-ai-docs.md)

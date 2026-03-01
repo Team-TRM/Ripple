@@ -70,6 +70,10 @@ COHORT UPDATES:
 
 HEALTH DELTAS (REQUIRED — always include this):
 - These directly adjust the company's health dashboard. They are INTEGER changes applied to current scores (0-100 scale).
+- Metric directionality:
+  - Higher publicSentiment and internalStability = better for company health.
+  - Higher mediaHeat, regulatoryPressure, and fraudRisk = worse for company health.
+  - publicAwareness reflects exposure velocity; rising awareness during bad sentiment usually harms overall health.
 - CRITICAL: Changes must be VERY GRADUAL. The simulation runs 14 days (42 ticks). If scores drop 5 per tick, health reaches 0 in 10 ticks (3 days). That is TOO FAST.
 - overallDelta: Net company health change. Negative = crisis worsening, positive = recovery. Range: -5 to +8.
   - MOST ticks: -1 to -2 (slow decline from ongoing crisis). This is the DEFAULT.

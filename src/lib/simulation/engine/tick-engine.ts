@@ -64,6 +64,28 @@ type TickHealthDeltas = {
   publicAwarenessDelta: number
 }
 
+function deriveOverallFromComponentScores(scores: {
+  publicSentiment: number
+  mediaHeat: number
+  regulatoryPressure: number
+  internalStability: number
+  fraudRisk: number
+}) {
+  return Math.round(
+    0.3 * scores.publicSentiment +
+    0.25 * (100 - scores.mediaHeat) +
+    0.2 * (100 - scores.regulatoryPressure) +
+    0.15 * scores.internalStability +
+    0.1 * (100 - scores.fraudRisk)
+  )
+}
+
+function stepLimit(current: number, next: number, maxStep: number) {
+  const delta = next - current
+  if (Math.abs(delta) <= maxStep) return next
+  return current + Math.sign(delta) * maxStep
+}
+
 function getNextTickIndex(currentTickIndex: number, currentDay: number) {
   if (currentTickIndex < 2) {
     return { dayNumber: currentDay, tickIndex: currentTickIndex + 1 }
@@ -321,17 +343,41 @@ async function generateAndStoreTick(
 
   const healthScores = hd
     ? {
-        overall: clamp(currentHealth.overall + hd.overallDelta),
-        publicSentiment: clamp(currentHealth.publicSentiment + hd.publicSentimentDelta),
-        mediaHeat: clamp(currentHealth.mediaHeat + hd.mediaHeatDelta),
-        regulatoryPressure: clamp(currentHealth.regulatoryPressure + hd.regulatoryPressureDelta),
-        internalStability: clamp(currentHealth.internalStability + hd.internalStabilityDelta),
-        fraudRisk: clamp(currentHealth.fraudRisk + hd.fraudRiskDelta),
-        publicAwareness: clamp((currentHealth.publicAwareness ?? 10) + (hd.publicAwarenessDelta ?? 0)),
-        ...(overallPerRun.length > 1 && {
-          overallMin: Math.min(...overallPerRun),
-          overallMax: Math.max(...overallPerRun),
-        }),
+        ...(() => {
+          const publicSentiment = clamp(currentHealth.publicSentiment + hd.publicSentimentDelta)
+          const mediaHeat = clamp(currentHealth.mediaHeat + hd.mediaHeatDelta)
+          const regulatoryPressure = clamp(currentHealth.regulatoryPressure + hd.regulatoryPressureDelta)
+          const internalStability = clamp(currentHealth.internalStability + hd.internalStabilityDelta)
+          const fraudRisk = clamp(currentHealth.fraudRisk + hd.fraudRiskDelta)
+          const publicAwareness = clamp((currentHealth.publicAwareness ?? 10) + (hd.publicAwarenessDelta ?? 0))
+
+          // Keep overall directionally consistent with component semantics:
+          // higher publicSentiment/internalStability are good, higher media/regulatory/fraud are bad.
+          const deltaDrivenOverall = clamp(currentHealth.overall + hd.overallDelta)
+          const derivedOverall = clamp(deriveOverallFromComponentScores({
+            publicSentiment,
+            mediaHeat,
+            regulatoryPressure,
+            internalStability,
+            fraudRisk,
+          }))
+          const blendedOverall = clamp(Math.round(deltaDrivenOverall * 0.35 + derivedOverall * 0.65))
+          const overall = clamp(stepLimit(currentHealth.overall, blendedOverall, 4))
+
+          return {
+            overall,
+            publicSentiment,
+            mediaHeat,
+            regulatoryPressure,
+            internalStability,
+            fraudRisk,
+            publicAwareness,
+            ...(overallPerRun.length > 1 && {
+              overallMin: Math.min(...overallPerRun),
+              overallMax: Math.max(...overallPerRun),
+            }),
+          }
+        })(),
       }
     : calculateHealthScoresFromNodes(updatedNodes)
 

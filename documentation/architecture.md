@@ -1,193 +1,128 @@
 # System Architecture
 
-## High-Level Overview
+## High-Level View
 
-Ripple is a perception-driven crisis simulation platform. It models how a corporate crisis unfolds across media, public, and institutional actors using AI-powered graph-based influence propagation. A human player acts as the CEO, making strategic decisions at key moments while the simulation generates realistic media content, social reactions, and stakeholder dynamics.
+Ripple is a full-stack simulation system where LLMs propose narrative and behavioral changes, and a deterministic engine applies bounded state transitions over a stakeholder influence graph.
 
+```text
+UI (Next.js + React)
+  - Setup workflow
+  - Live simulation dashboard
+  - Decision + report overlays
+
+API layer (Route Handlers)
+  - /projects lifecycle
+  - /step runtime progression
+  - /decide /report /rerun
+  - /sources/url external grounding tool
+
+Simulation core
+  - Tick engine
+  - Autonomous agent loop
+  - Graph engine (influence + decay)
+  - Health engine
+  - Report generator
+
+Persistence + model layer
+  - PostgreSQL via Prisma
+  - Mistral model calls (structured JSON IO)
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     Next.js Frontend                        │
-│  SimulationDashboard ← SimulationContext (useReducer)       │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
-│  │ Force    │ │ Live     │ │ Metrics  │ │ Decision /    │  │
-│  │ Graph    │ │ Events   │ │ Sidebar  │ │ Report Dialog │  │
-│  └──────────┘ └──────────┘ └──────────┘ └───────────────┘  │
-└───────────────────────┬─────────────────────────────────────┘
-                        │ REST API (Next.js Route Handlers)
-┌───────────────────────▼─────────────────────────────────────┐
-│                    API Layer                                 │
-│  /projects  /step  /decide  /confirm  /report  /rerun       │
-└───────────────────────┬─────────────────────────────────────┘
-                        │
-┌───────────────────────▼─────────────────────────────────────┐
-│               Simulation Engine                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
-│  │ Tick Engine  │  │ Graph Engine │  │ Health Calculator │  │
-│  │ (orchestrate)│  │ (mutations)  │  │ (scoring)        │  │
-│  └──────┬───────┘  └──────────────┘  └──────────────────┘  │
-│         │                                                    │
-│  ┌──────▼───────────────────────────────────────────────┐   │
-│  │              Multi-Agent System                       │   │
-│  │  ┌────────────┐ ┌───────────┐ ┌──────────────────┐  │   │
-│  │  │ Speakers   │ │ Cohorts   │ │ Executives       │  │   │
-│  │  │ (15-25     │ │ (4 groups │ │ (CTO, PR, Legal, │  │   │
-│  │  │ named ppl) │ │ influence)│ │  Operations)     │  │   │
-│  │  └────────────┘ └───────────┘ └──────────────────┘  │   │
-│  └──────────────────────────────────────────────────────┘   │
-└───────────────────────┬─────────────────────────────────────┘
-                        │
-         ┌──────────────┼──────────────┐
-         ▼              ▼              ▼
-┌──────────────┐ ┌────────────┐ ┌──────────────┐
-│  Mistral AI  │ │ PostgreSQL │ │ Prisma ORM   │
-│  (LLM calls) │ │ (all data) │ │ (type-safe)  │
-└──────────────┘ └────────────┘ └──────────────┘
-```
-
-## Technology Stack
-
-| Layer | Technology | Purpose |
-|-------|-----------|---------|
-| Framework | Next.js 16, React 19, TypeScript | Full-stack web app with App Router |
-| Database | PostgreSQL | All relational data, graph state as JSON |
-| ORM | Prisma | Type-safe database access, migrations |
-| AI | Mistral AI (small + large models) | Content generation, analysis, decisions |
-| Graph Viz | react-force-graph-2d | Canvas-based force-directed graph |
-| Styling | Tailwind CSS | Dark theme, Plague Inc. aesthetic |
-| Validation | Zod | LLM output validation with resilient parsing |
 
 ## Core Design Principles
 
-### 1. LLM Generates Content, Engine Controls State
+### 1) Controlled Hybrid Intelligence
 
-The LLM produces narrative content (messages, cohort summaries, decision prompts) but never directly mutates simulation state. All state changes flow through the deterministic graph engine, which bounds deltas and enforces invariants.
+- LLM output is treated as proposals.
+- Deterministic code enforces bounds, clamps, and state invariants.
+- This keeps behavior expressive without letting raw model output corrupt state.
 
-Additionally, top active stakeholders run an autonomous plan → tool → execute loop each tick. Their tool outputs are merged into bounded state updates before graph propagation.
+### 2) Agentic Runtime, Not Just One Prompt
 
-### 2. Single Read-Modify-Write for Graph
+Per tick, Ripple runs:
+- one orchestration generation pass (`generateEnhancedTick`)
+- three stochastic parallel runs for robustness (then averaged)
+- independent planner calls for top active nodes
+- deterministic tool execution for each selected agent plan
 
-`processTickUpdates()` loads the entire graph once, applies all mutations in-memory (cohort deltas → influence propagation → activation decay), then writes once. This prevents partial updates and race conditions.
+### 3) Single Read-Modify-Write Graph Mutation
 
-### 3. Non-Blocking Fetch + Staggered Display
+`processTickUpdates()` loads graph state once, applies all node updates and propagation in memory, then writes back once. This avoids partial writes and keeps each tick atomic.
 
-Tick fetches don't block the UI. Messages drain independently from background LLM calls, giving a real-time news feed feel. User events abort in-flight fetches and retry immediately.
+### 4) Persisted Memory + Replayability
 
-### 4. Snapshot-Based Branching
+- Message history is persisted and used as speaker memory context.
+- `graphSnapshot` is stored each tick for branch reruns.
+- Rerun restores graph at a decision point, removes future branch data, and continues from that branch.
 
-Each tick stores a `graphSnapshot` (full graph state at that moment). Reruns restore from snapshot rather than replaying — enabling "what-if" scenarios without massive computation.
+### 5) Human-in-the-Loop by Design
 
-### 5. Gradual Health Dynamics
+- Decision prompts are generated for evening ticks.
+- Simulation pauses for explicit user choice.
+- User can inject events during runtime.
 
-Health scores drop 1-2 per tick by default. Critical escalations trigger -3 to -5 (rare). Good decisions reward +3 to +8. This prevents runaway collapse and makes decisions impactful.
+## Runtime Flow
 
-## Data Flow
+```text
+Create project
+  -> clarifying questions
+  -> setup generation (summary + cohorts + timeline)
+  -> confirm build (tick0 + graph + speakers + population)
 
-```
-User Creates Project
-    ↓
-POST /api/projects → generateQuestions() [LLM]
-    ↓
-User Answers Questions
-    ↓
-POST /api/projects/[id]/answers
-    ├→ generateSummary() [LLM]
-    └→ generateSetup() [LLM] → Cohorts + TimelineEvents
-    ↓
-User Confirms Setup
-    ↓
-POST /api/projects/[id]/confirm (SSE stream)
-    ├→ generateTick() → Tick 0 + Messages
-    ├→ generateGraph() [LLM] → Influence graph
-    ├→ generateSpeakerProfiles() [LLM] → 15-25 named speakers
-    └→ initializePopulationStats()
-    ↓
-Simulation Running (Play Loop)
-    ↓
-┌→ POST /api/projects/[id]/step
-│   ├→ generateEnhancedTick() [LLM] → messages, deltas, decisions
-│   ├→ runAutonomousAgentLoop() [parallel per-node plans + deterministic tools]
-│   ├→ processTickUpdates() → graph mutations
-│   ├→ Store Tick + Messages + Health + Snapshots
-│   └→ If evening: generateExecutiveAdvice() [LLM]
-│
-├→ User injects crisis → abort + retry with event
-├→ User makes decision → POST /api/projects/[id]/decide
-└→ Repeat until simulationDays reached
-    ↓
-POST /api/projects/[id]/report → generateSimulationReport() [LLM]
-    ↓
-Optional: POST /api/projects/[id]/rerun → Branch from decision point
+Loop while running:
+  -> /step
+    -> build tick context from DB + memory
+    -> 3x orchestrator stochastic runs
+    -> autonomous top-node plan->tool execution
+    -> merge deltas/messages
+    -> mutate graph (bounded)
+    -> compute/blend health
+    -> persist tick + messages + health + snapshot
+    -> optional decision prompt + executive advice
+
+Complete:
+  -> /report post-mortem
+  -> optional /rerun branch from decision point
 ```
 
-## Tick Structure
+## Subsystems
 
-Each simulation day has 3 ticks (time periods), each tick has 3 sub-ticks (processing phases):
+### Frontend
 
-| Tick (tickIndex) | Period | Sub-tick 0: Generate | Sub-tick 1: Observe | Sub-tick 2: Update |
-|------------------|--------|---------------------|--------------------|--------------------|
-| 0 | Morning | LLM generates overnight news, early reports | Route info to nodes by channel prefs | Apply deltas, propagate influence |
-| 1 | Afternoon | LLM generates social media reactions, influencer posts | Route social content to connected nodes | Propagate influence, check triggers |
-| 2 | Evening | LLM generates official responses, analysis | Route official content through trust channels | Propagate, decay, recalculate health, decision points |
+- `SimulationContext` + reducer is the state backbone.
+- Play loop decouples fetch from message drain for a live feed feel.
+- Force graph keeps position stability and smooth activation interpolation.
 
-- **3 LLM calls per day** (one per tick's generate phase)
-- **Auto-pause** after evening update — user reviews and proceeds
-- **Decision points** only appear in evening ticks
-- **Crisis injections** are loaded for evening decision context
+### API
 
-## Graph Model
+- Thin orchestration routes with explicit lifecycle stages.
+- SSE streaming in `/confirm` for build-progress feedback.
+- Runtime endpoints return full tick payloads with graph and health updates.
 
-The influence graph is stored as JSON on the Project model (not in a separate graph database):
+### Simulation Engine
 
-**Nodes** represent stakeholder groups and environment actors:
-- Types: `public`, `government`, `media`, `employees`, `company`, `influencer`, `regulator`
-- Properties: `sentiment` (-1 to 1), `activation` (0 to 1), `trustInCompany` (0 to 1)
+- Tick progression with day/tick cursor logic.
+- Context-aware generation using recent messages, prior decisions, and health.
+- Autonomous agent layer with tool logs and bounded effects.
 
-**Edges** represent influence relationships:
-- Properties: `weight` (0 to 1), `type` (influence | trust | information)
-- Influence flows along edges: active nodes shift connected nodes' sentiment
+### Persistence
 
-**Mutations per tick:**
-1. Apply LLM cohort deltas to matching nodes (bounded ±0.25)
-2. Propagate influence along edges (active nodes > 0.2 activation)
-3. Apply activation decay (×0.97 per tick ≈ 25% over 14 days)
+- Relational entities: projects, cohorts, events, ticks, messages, decisions.
+- JSON fields for graph, speaker profiles, population, prior reports.
+- Cascade deletion keeps lifecycle cleanup simple for hackathon iteration speed.
 
-## Health Score Derivation
+## Health Semantics
 
-Health scores are derived from node states, not set arbitrarily:
+All health metrics are 0-100, but polarity differs:
 
-| Metric | Source | Calculation |
-|--------|--------|-------------|
-| Public Sentiment | Public nodes avg sentiment | Mapped to 0-100 |
-| Media Heat | Media nodes avg activation | × 100 |
-| Regulatory Pressure | Regulator/govt nodes avg activation | × 100 |
-| Internal Stability | Employee nodes avg trust | × 100 |
-| Fraud Risk | Public/influencer (1 - trust) × activation | × 100 |
-| Public Awareness | Media heat (60%) + public activation (40%) | Blend |
-| Overall | Weighted composite | 0.3×sentiment + 0.25×(100-media) + 0.2×(100-reg) + 0.15×stability + 0.1×(100-fraud) |
+- Higher is good: `overall`, `publicSentiment`, `internalStability`
+- Higher is bad: `mediaHeat`, `regulatoryPressure`, `fraudRisk`
+- Context metric: `publicAwareness` (exposure velocity)
 
-## File Organization
+Overall health is derived from weighted component semantics and blended with model-driven deltas, then step-limited to prevent unrealistic jumps.
 
-```
-src/
-├── app/                          # Next.js App Router
-│   ├── api/projects/             # REST API routes
-│   ├── project/[id]/page.tsx     # Simulation view
-│   └── page.tsx                  # Dashboard home
-├── lib/
-│   ├── ai/                       # Mistral client + Zod schemas
-│   ├── agents/                   # Multi-agent system
-│   │   ├── core/                 # Agent types + registry
-│   │   ├── orchestrator/         # Tick generation (LLM)
-│   │   ├── speakers/             # Named individual agents
-│   │   ├── executives/           # C-suite advisory agents
-│   │   └── cohorts/              # Cohort dynamics + influence
-│   ├── simulation/
-│   │   ├── engine/               # Tick engine + graph engine
-│   │   └── health/               # Health score calculator
-│   ├── analysis/                 # Post-simulation report
-│   ├── setup/                    # Project setup pipeline
-│   └── db/                       # Prisma client singleton
-└── components/
-    ├── simulation/               # Dashboard components
-    └── project/                  # Project management UI
-```
+## Why This Maps Well to Judging Criteria
+
+- Technicality: modular architecture, bounded engine, persistent state, independent agent loops.
+- Creativity: crisis "time machine" with social/institutional cascade modeling.
+- Usefulness: direct decision support for comms, legal, ops, and leadership workflows.
+- Demo strength: clear lifecycle from setup to live run to actionable report/rerun.

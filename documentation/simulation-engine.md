@@ -1,187 +1,129 @@
 # Simulation Engine
 
-The simulation engine is the core of Ripple. It orchestrates tick progression, LLM content generation, graph mutations, health scoring, and decision points.
+The simulation engine advances Ripple one tick at a time, combining structured LLM generation with deterministic graph mutation and health scoring.
 
-## Engine Components
+## Engine Modules
 
-```
-┌─────────────────────────────────────────────┐
-│              tick-engine.ts                  │
-│  runTick() → generateAndStoreTick()         │
-│         │                                    │
-│         ├→ context-builder.ts (build prompt) │
-│         ├→ tick-orchestrator.ts (LLM call)   │
-│         ├→ graph-engine.ts (mutations)       │
-│         ├→ health-calculator.ts (scoring)    │
-│         └→ generate-advice.ts (decisions)    │
-└─────────────────────────────────────────────┘
-```
+- `src/lib/simulation/engine/tick-engine.ts`
+- `src/lib/simulation/engine/graph-engine.ts`
+- `src/lib/simulation/health/health-calculator.ts`
+- `src/lib/agents/orchestrator/tick-orchestrator.ts`
+- `src/lib/agents/orchestrator/autonomous-agent-loop.ts`
+- `src/lib/agents/tools/simulation-tools.ts`
 
-## Tick Engine (`src/lib/simulation/engine/tick-engine.ts`)
+## Tick Model
 
-### `runTick(projectId, decision?, userEvent?, fromDay?, fromTickIndex?)`
+- 3 ticks per simulation day:
+  - `tickIndex=0` Morning
+  - `tickIndex=1` Afternoon
+  - `tickIndex=2` Evening
+- Each tick is persisted with sub-ticks:
+  - `subTickIndex=0` generate
+  - `subTickIndex=1` observe
+  - `subTickIndex=2` update
 
-Entry point for advancing the simulation by one tick. Returns a `TickResult` with graph state, health scores, messages, and optional decision prompt.
+## `runTick()` Lifecycle
 
-**Flow:**
+`runTick(projectId, decision?, userEvent?, fromDay?, fromTickIndex?)`
 
-1. **Determine next position** — calculates the next `{ dayNumber, tickIndex }` from either explicit cursor or last stored tick
-2. **Call `generateAndStoreTick()`** — does all the work
-3. **Update project cursor** — sets `project.currentDay`
+1. Resolve next `{ dayNumber, tickIndex }`.
+2. Call `generateAndStoreTick(...)`.
+3. Update project cursor (`currentDay`).
+4. Return tick payload (messages, graph, health, decisions, agent actions).
 
-### `generateAndStoreTick(projectId, dayNumber, tickIndex, decision?, userEvent?)`
+## `generateAndStoreTick()` Pipeline
 
-The main orchestration function (~300 lines). Executes in this order:
+### Phase 1: Load Context
 
-**Phase 1: Load Context**
-- Fetch project with cohorts
-- Get current graph state (nodes + edges)
-- Get speaker profiles and population stats
-- Get last health scores from most recent tick
-- Get previous cohort summaries (for narrative continuity)
-- Get recent messages (last 5, for speaker memory)
-- Get last user decision (for context)
+- Project, cohorts, last tick summaries/messages.
+- Current graph (`nodes`, `edges`).
+- Speaker profiles and speaker memory.
+- Prior population stats.
+- Latest stored health scores.
+- Most recent resolved decision context.
+- Evening-only breaking developments and injected events.
 
-**Phase 2: Build LLM Input**
-- Crisis context + cohort descriptions + sensitivity tags
-- Previous cohort states (mood, sentiment, activation per cohort)
-- Timeline events for current day
-- Speaker profiles with recent posts (memory)
-- Current health scores
-- Breaking developments (evening ticks: high-impact messages from today)
-- User-injected crises from database
+### Phase 2: Stochastic Orchestration
 
-**Phase 3: LLM Generation**
-- Call `generateEnhancedTick()` → returns messages, cohort updates, health deltas, optional decision prompt, optional new nodes
+- Build `tickInput` and run `generateEnhancedTick(...)` **3 times in parallel**.
+- Average cohort and health deltas across runs.
+- Keep per-run overall range for confidence band (`overallMin`, `overallMax`).
 
-**Phase 4: Autonomous Agent Loop**
-- Select top active/connected nodes
-- Run independent per-node planner calls in parallel
-- Execute deterministic tool actions
-- Merge autonomous node updates, health deltas, and agent action messages
+### Phase 3: Independent Agent Planning + Tool Execution
 
-**Phase 5: Graph Mutations**
-- Call `processTickUpdates()` with LLM cohort deltas
-- Returns updated nodes + edges
+- Select top active/connected nodes.
+- Run per-node planner calls in parallel (`planAgentAction`).
+- Execute deterministic tools (`executeAgentPlan`).
+- Merge tool-driven node/health deltas and generated action messages.
 
-**Phase 6: Health Scoring**
-- Calculate health from node states via `calculateHealthScoresFromNodes()`
-- Apply LLM health deltas (bounded, additive)
-- Apply autonomous tool health deltas (bounded, additive)
-- Clamp all scores to [0, 100]
+### Phase 4: Graph Mutation
 
-**Phase 7: Database Storage**
-- Create 3 sub-tick records (generate=0, observe=1, update=2) in single transaction
-- Store messages on generate sub-tick
-- Store cohort summaries on observe sub-tick
-- Store health scores on update sub-tick
-- Save graph snapshot on generate sub-tick (for rerun branching)
+- Send merged cohort/node updates to `processTickUpdates(...)`.
+- Apply bounded deltas to matching nodes.
+- Apply influence propagation over edges.
+- Apply activation decay.
+- Persist updated graph in one write.
 
-**Phase 8: Decision Generation (Evening Only)**
-- If LLM produced a decision prompt (tickIndex === 2)
-- Call `generateExecutiveAdvice()` → 4 C-suite recommendations
-- Create `DecisionPoint` record with prompt, options, and recommendations
+### Phase 5: Health Computation and Blending
 
-**Phase 9: Population Stats**
-- Recalculate active speakers and sentiment trends from node states
+Health is computed from component semantics:
 
-## Graph Engine (`src/lib/simulation/engine/graph-engine.ts`)
+- `publicSentiment` from public node sentiment.
+- `mediaHeat` from media activation.
+- `regulatoryPressure` from government/regulator activation.
+- `internalStability` from employee trust.
+- `fraudRisk` from distrust x activation in public/influencer nodes.
+- `publicAwareness` from media/public activation blend.
 
-### `processTickUpdates(projectId, cohortUpdates, cohorts, existingEdges?)`
+Then:
+- apply averaged LLM deltas + tool deltas
+- blend delta-driven overall with derived overall
+- step-limit overall changes per tick to avoid unrealistic jumps
+- clamp all values to `[0,100]`
 
-The atomic graph mutation pipeline. Loads graph once, applies all mutations in-memory, writes once.
+### Phase 6: Persistence
 
-**Phase 0: Add New Nodes**
-- If LLM suggested new stakeholder nodes (rare), add them to the graph
-- Connect with initial edges
+- Create generate tick with messages/summaries.
+- Create observe/update sub-ticks.
+- Upsert `HealthScore` on update tick.
+- Save graph snapshot for rerun branching.
 
-**Phase 1: Apply Cohort Deltas**
-- Match LLM cohort updates to graph nodes by `cohortId`
-- Apply sentiment delta (bounded ±0.25, clamped to [-1, 1])
-- Apply activation delta (bounded ±0.25, clamped to [0, 1])
-- Apply trust delta (bounded ±0.25, clamped to [0, 1])
-- Update dominant narrative and behaviours
+### Phase 7: Decision + Executive Advice (Evening)
 
-**Phase 2: Influence Propagation**
-- For each edge in the graph:
-  - If source node activation > 0.2 (active enough to influence)
-  - Calculate sentiment pull: `(source.sentiment - target.sentiment) × weight × 0.1`
-  - Calculate activation pull: `(source.activation - target.activation) × weight × 0.05`
-  - Apply bounded deltas (±0.15 sentiment, ±0.1 activation)
+If evening tick returns a decision prompt:
+- generate 4 executive recommendations
+- create `DecisionPoint` record
+- pause until user submits `chosenOption`
 
-**Phase 3: Activation Decay**
-- All nodes: `activation *= 0.97` (3% decay per tick)
-- Over 14 days (42 ticks): ~25% total decay
-- Prevents permanent high-activation states
+### Phase 8: Population Stats Refresh
 
-**Phase 4: Write to DB**
-- Single `prisma.project.update()` with final nodes + edges
+- Recompute active speaker stats from node state.
+- Persist to `project.populationStats`.
 
-### `saveStateSnapshots(projectId, tickId)`
+## Graph Engine Details
 
-Saves current graph state (`{ nodes, edges }`) to `tick.graphSnapshot`. Called every tick from the tick engine. Enables rerun branching.
+`processTickUpdates(projectId, cohortUpdates, newNodes?)`
 
-### `restoreGraphFromSnapshot(projectId, tickId)`
-
-Reads `tick.graphSnapshot` and writes it back to `project.graphNodes` / `project.graphEdges`. Used when branching from a decision point.
-
-### `calculateHealthScoresFromNodes(nodes)`
-
-Derives health metrics from node states. See [Architecture > Health Score Derivation](./architecture.md#health-score-derivation) for the full formula.
-
-## Influence Propagation (`src/lib/agents/cohorts/influence/propagation.ts`)
-
-Alternative propagation implementation used by the agent system:
-
-### `applyInfluencePropagation(nodes, edges)`
-
-Single-pass influence along edges. Only active nodes (activation > 0.2) propagate. Weighted sum of incoming influences with bounded deltas.
-
-### `applyActivationDecay(nodes, decayFactor = 0.97)`
-
-Applies multiplicative decay to all node activations.
-
-## Health Calculator (`src/lib/simulation/health/health-calculator.ts`)
-
-### `calculateHealthScoresFromNodes(nodes)`
-
-Pure function that derives 7 health metrics from node array. Groups nodes by type, calculates averages, applies weights for overall score. All scores clamped [0, 100].
-
-## Tick Result Shape
-
-```typescript
-type TickResult = {
-  dayNumber: number
-  tickIndex: number
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  healthScores: HealthScores
-  messages: Array<{
-    id: string
-    type: string
-    author: string
-    content: string
-    parentId?: string
-    reach: number
-    sentiment: number
-  }>
-  decisionPrompt?: {
-    prompt: string
-    options: string[]
-  }
-  executiveRecommendations?: ExecutiveRecommendation[]
-  populationStats?: CohortAgentState[]
-  newNodes?: Array<{ label: string; type: string; cohortId?: string }>
-}
-```
+1. Optional new-node insertion (if narratively justified).
+2. Apply node updates with strict bounds:
+   - sentiment delta: `[-0.25, +0.25]`
+   - activation delta: `[-0.25, +0.25]`
+   - trust delta: `[-0.25, +0.25]`
+3. Influence propagation across edges (`weight`-scaled).
+4. Activation decay (`0.97` multiplier).
+5. Persist graph once.
 
 ## Key Invariants
 
-| Property | Range | Bounded Per-Tick |
-|----------|-------|-----------------|
-| Node sentiment | [-1, 1] | ±0.25 from LLM, ±0.15 from propagation |
-| Node activation | [0, 1] | ±0.25 from LLM, ±0.1 from propagation, ×0.97 decay |
-| Node trust | [0, 1] | ±0.25 from LLM |
-| Edge weight | [0, 1] | Immutable after creation |
-| Health scores | [0, 100] | LLM deltas additive, clamped |
-| Messages per tick | 4-8 | LLM generated, Zod validated |
+- Node sentiment is always in `[-1, 1]`.
+- Activation and trust are always in `[0, 1]`.
+- Health metrics are always in `[0, 100]`.
+- Decision prompts are evening-only.
+- Tick uniqueness is enforced by `(projectId, dayNumber, tickIndex, subTickIndex)`.
+
+## Runtime Guarantees for Demo Stability
+
+- Autonomous agent loop is additive and bounded.
+- If autonomous planning fails/timeout occurs, engine falls back safely and continues.
+- Tick writes are idempotency-aware (duplicate guard on unique key).
+- Snapshot-based rerun avoids replay drift and keeps branching deterministic.

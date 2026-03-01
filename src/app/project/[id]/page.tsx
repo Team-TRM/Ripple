@@ -95,6 +95,7 @@ function SourcePlaceholderCard({
   hint,
   onAction,
   actionBusy,
+  variant = 'default',
 }: {
   icon: ReactNode
   title: string
@@ -103,19 +104,31 @@ function SourcePlaceholderCard({
   hint: string
   onAction?: () => void
   actionBusy?: boolean
+  variant?: 'default' | 'connected'
 }) {
+  const buttonClass = variant === 'connected'
+    ? 'mt-3 h-9 px-3 rounded-lg border border-emerald-500/50 bg-emerald-500/15 hover:bg-emerald-500/20 text-emerald-200 text-xs font-medium text-left inline-flex items-center justify-between transition-colors'
+    : 'mt-3 h-9 px-3 rounded-lg border border-blue-500/40 bg-blue-500/15 hover:bg-blue-500/20 text-blue-200 text-xs font-medium text-left inline-flex items-center justify-between transition-colors'
+  const iconToneClass = variant === 'connected' ? 'text-emerald-300' : 'text-blue-300'
+
   return (
     <div className="bg-gray-900/80 border border-gray-800 rounded-xl p-4 flex flex-col">
-      <div className="w-8 h-8 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center text-blue-300 mb-3">
+      <div className={`w-8 h-8 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center mb-3 ${iconToneClass}`}>
         {icon}
       </div>
+      {variant === 'connected' && (
+        <div className="inline-flex items-center gap-1.5 mb-2">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          <span className="text-[10px] uppercase tracking-wider text-emerald-300">Connected</span>
+        </div>
+      )}
       <h3 className="text-sm font-semibold text-white mb-1">{title}</h3>
       <p className="text-xs text-gray-500 leading-relaxed flex-1">{description}</p>
       <button
         type="button"
         onClick={onAction}
         disabled={actionBusy}
-        className="mt-3 h-9 px-3 rounded-lg border border-blue-500/40 bg-blue-500/15 hover:bg-blue-500/20 text-blue-200 text-xs font-medium text-left inline-flex items-center justify-between transition-colors"
+        className={buttonClass}
       >
         <span>{cta}</span>
         <span aria-hidden="true">&rarr;</span>
@@ -655,11 +668,12 @@ export default function ProjectPage() {
                         <path d="M5.5 12v6c0 1.7 2.9 3 6.5 3s6.5-1.3 6.5-3v-6" />
                       </svg>
                     )}
-                    title="Connect Database"
-                    description="Attach company systems (employees, CRM, incidents, policy docs) as structured context for simulation world-building."
-                    cta="Connect data source"
-                    hint="Supports SQL warehouses and internal APIs."
-                    onAction={() => showTransientNotice('Database connector linked to this simulation context.')}
+                    title="Database Connected"
+                    description="PostgreSQL (via Prisma) is active for this simulation and grounding stakeholder, timeline, and decision-state context."
+                    cta="Connection active"
+                    hint={`${cohorts.length} stakeholder cohorts synced from project database.`}
+                    onAction={() => showTransientNotice('PostgreSQL data source is connected and syncing simulation context.')}
+                    variant="connected"
                   />
                   <SourcePlaceholderCard
                     icon={(

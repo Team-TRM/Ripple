@@ -1,203 +1,122 @@
-# Mistral AI — Reference Documentation
+# Mistral Integration in Ripple
 
-## Models
+This document describes how Ripple uses Mistral models in production paths.
 
-### Frontier Generalist Models
+## Model Allocation Strategy
 
-| Model | Model ID | Type | Best For |
-|-------|----------|------|----------|
-| **Mistral Large 3** (v25.12) | `mistral-large-latest` | Open-weight | High-complexity tasks, state-of-the-art performance |
-| **Mistral Medium 3.1** (v25.08) | `mistral-medium-latest` | Frontier | Enterprise-grade, advanced multimodal |
-| **Mistral Small 3.2** (v25.06) | `mistral-small-latest` | Open | Efficient general tasks |
-| **Ministral 3** 14B/8B/3B (v25.12) | `ministral-3b-latest` etc. | Open | Text and vision at various scales |
-| **Magistral Medium/Small 1.2** (v25.09) | `magistral-medium-latest` | Premier | Reasoning-heavy workloads (40k context) |
+Ripple uses two model tiers:
 
-### Specialist Models
+- `mistral-large-latest` for setup quality and schema-rich world building.
+- `mistral-small-latest` for high-frequency runtime generation and tool planning.
 
-| Model | Model ID | Best For |
-|-------|----------|----------|
-| **Codestral** (v25.08) | `codestral-latest` | Code completion (FIM), code generation |
-| **Devstral 2** (v25.12) | `devstral-latest` | Software engineering, code agents |
-| **Codestral Embed** (v25.05) | `codestral-embed-latest` | Code semantic embeddings |
-| **Mistral Embed** | `mistral-embed` | Text embeddings |
-| **OCR 3** (v25.12) | — | Document processing |
-| **Mistral Moderation** (v24.11) | — | Content safety |
+This keeps setup quality high while controlling tick-time latency.
 
-### Recommendation for This Project
+## Where Each Model Is Used
 
-Use **`mistral-large-latest`** — the most capable general-purpose model. The alias always points to the latest version (currently Large 3, 675B total params).
+### `mistral-large-latest`
 
----
+- `src/lib/setup/generate-questions.ts`
+  - 1-3 targeted clarifying questions + forced timeline question.
+- `src/lib/setup/generate-summary.ts`
+  - factual setup summary.
+- `src/lib/setup/generate-setup.ts`
+  - project name, cohorts, timeline extraction.
 
-## TypeScript/JavaScript SDK
+### `mistral-small-latest`
 
-### Installation
+- `src/lib/setup/generate-graph.ts`
+  - initial influence graph + initial health.
+- `src/lib/agents/orchestrator/initial-tick.ts`
+  - tick 0 content.
+- `src/lib/agents/orchestrator/tick-orchestrator.ts`
+  - per-tick content + cohort updates + health deltas + decision prompt.
+- `src/lib/agents/orchestrator/agent-planner.ts`
+  - per-actor plan selection for autonomous loop.
+- `src/lib/agents/executives/advisory/generate-advice.ts`
+  - executive recommendations.
+- `src/lib/analysis/generate-report.ts`
+  - post-simulation report synthesis.
+- `src/lib/sources/url-source-tool.ts`
+  - structured external source extraction.
 
-```bash
-npm install @mistralai/mistralai
+## Structured Output Discipline
+
+Ripple relies heavily on JSON-mode generation and schema validation:
+
+- `responseFormat: { type: 'json_object' }`
+- Zod schemas in `src/lib/ai/schemas.ts`
+- strict parse + clamp logic in runtime layers
+
+Benefits:
+- predictable payload shapes
+- safer state transitions
+- easier debugging and replayability
+
+## Runtime Guardrails
+
+- Retry logic in orchestrator when malformed JSON appears.
+- Numeric bounds applied by schema and deterministic engine.
+- Tool execution is deterministic even when plan text is model-generated.
+- Planner timeouts fallback safely to baseline pipeline.
+
+## Stochastic Ensemble Pattern
+
+At each runtime tick, Ripple calls `generateEnhancedTick(...)` three times in parallel, then:
+- averages deltas for stable progression
+- tracks per-run overall range
+- surfaces confidence band in UI (`overallMin`, `overallMax`)
+
+This gives variance-awareness without requiring full multi-run simulation replay during the demo loop.
+
+## SDK Usage
+
+Client singleton:
+
+- `src/lib/ai/client.ts`
+
+```ts
+import { Mistral } from '@mistralai/mistralai'
+
+export const mistral = new Mistral({
+  apiKey: process.env.MISTRAL_API_KEY ?? '',
+})
 ```
 
-### Initialization
+Typical call shape:
 
-```typescript
-import { Mistral } from '@mistralai/mistralai';
-
-const client = new Mistral({
-  apiKey: process.env.MISTRAL_API_KEY!,
-});
-```
-
-### Chat Completion
-
-```typescript
-const result = await client.chat.complete({
-  model: 'mistral-large-latest',
+```ts
+const result = await mistral.chat.complete({
+  model: 'mistral-small-latest',
   messages: [
-    { role: 'system', content: 'You are a helpful assistant.' },
-    { role: 'user', content: 'What is the capital of France?' },
-  ],
-});
-
-console.log(result.choices?.[0]?.message?.content);
-```
-
-### JSON Mode
-
-Force structured JSON output:
-
-```typescript
-const result = await client.chat.complete({
-  model: 'mistral-large-latest',
-  messages: [
-    { role: 'user', content: 'List 3 colors as JSON array' },
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: userPrompt },
   ],
   responseFormat: { type: 'json_object' },
-});
-
-const parsed = JSON.parse(result.choices?.[0]?.message?.content as string);
+  temperature: 0.4,
+})
 ```
 
-### Streaming
+## Prompting Patterns Used
 
-```typescript
-const stream = await client.chat.stream({
-  model: 'mistral-large-latest',
-  messages: [
-    { role: 'user', content: 'Tell me a story' },
-  ],
-});
+- strong system prompts with explicit schemas
+- directional metric semantics (what increases/decreases health)
+- tick-specific behavior constraints (morning/afternoon/evening)
+- narrative continuity via recent messages and memory blocks
+- decision-gating rules (evening-only prompts)
 
-for await (const chunk of stream) {
-  const content = chunk.data?.choices?.[0]?.delta?.content;
-  if (content) process.stdout.write(content);
-}
-```
+## External Source Grounding
 
-### Embeddings
+URL ingestion pipeline:
+1. validate URL and block internal/private hosts
+2. fetch + text extraction
+3. summarize to structured facts with Mistral
+4. append to project context in tagged blocks
 
-```typescript
-const result = await client.embeddings.create({
-  model: 'mistral-embed',
-  inputs: ['Embed this sentence.', 'As well as this one.'],
-});
-```
+This provides RAG-like grounding within the simulation context window, with low integration overhead.
 
-### Agents
+## Extension Points
 
-```typescript
-const result = await client.agents.complete({
-  agentId: '<agent-id>',
-  messages: [
-    { role: 'user', content: 'Your prompt' },
-  ],
-});
-```
-
-### File Upload
-
-```typescript
-const result = await client.files.upload({
-  file: await openAsBlob('example.file'),
-});
-```
-
----
-
-## Chat Completion API — Full Parameters
-
-### Endpoint
-
-`POST /v1/chat/completions`
-
-### Parameters
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `model` | string | **required** | Model ID (e.g., `mistral-large-latest`) |
-| `messages` | array | **required** | Array of `{role, content}` objects. Roles: `system`, `user`, `assistant`, `tool` |
-| `temperature` | number | — | Controls randomness (0.0–0.7 recommended) |
-| `max_tokens` | number | — | Max tokens in completion |
-| `top_p` | number | 1 | Nucleus sampling threshold |
-| `random_seed` | number | — | For deterministic output |
-| `n` | number | 1 | Number of completions to generate |
-| `stream` | boolean | false | Enable server-sent events streaming |
-| `stop` | string/array | — | Stop sequences |
-| `response_format` | object | `{type:"text"}` | `{type:"json_object"}` or `{type:"json_schema", json_schema:{...}}` |
-| `tools` | array | — | Function definitions for tool calling |
-| `tool_choice` | string | — | `"none"`, `"auto"`, `"any"`, `"required"` |
-| `parallel_tool_calls` | boolean | true | Allow simultaneous function calls |
-| `frequency_penalty` | number | 0 | Discourages token repetition |
-| `presence_penalty` | number | 0 | Encourages vocabulary diversity |
-| `safe_prompt` | boolean | false | Inject safety guidelines |
-
-### Response Structure
-
-```json
-{
-  "id": "cmpl-abc123",
-  "object": "chat.completion",
-  "created": 1700000000,
-  "model": "mistral-large-latest",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "The response text..."
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 10,
-    "completion_tokens": 50,
-    "total_tokens": 60
-  }
-}
-```
-
----
-
-## SDK Resources
-
-The SDK provides access to:
-
-- **Chat** — Standard and streaming completions
-- **Agents** — Agent-based completions and streaming
-- **Embeddings** — Text embedding generation
-- **Files** — Upload, list, retrieve, delete, download
-- **Batch Jobs** — Create, list, get, cancel
-- **Fine-tuning** — Job management and model operations
-- **Models** — List, retrieve, delete, update, archive/unarchive
-- **Classifiers** — Moderation and classification
-- **OCR** — Document processing
-
----
-
-## Sources
-
-- [Mistral AI Models Overview](https://docs.mistral.ai/getting-started/models/models_overview/)
-- [Mistral AI API Specs](https://docs.mistral.ai/api)
-- [SDK Clients Documentation](https://docs.mistral.ai/getting-started/clients)
-- [GitHub: mistralai/client-ts](https://github.com/mistralai/client-ts)
-- [npm: @mistralai/mistralai](https://www.npmjs.com/package/@mistralai/mistralai)
+Natural next upgrades (already compatible with architecture):
+- retrieval over dedicated vector store for larger corpora
+- selective model routing by scenario complexity
+- fine-tuned domain model for specific crisis verticals

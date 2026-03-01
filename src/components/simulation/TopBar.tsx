@@ -6,7 +6,7 @@ import { useSimulation, useSimulationDispatch } from './SimulationContext'
 const TICK_LABELS = ['Morning', 'Afternoon', 'Evening']
 
 export default function TopBar() {
-  const { projectName, healthScores, isPlaying, currentDay, currentTickIndex, currentSubTickIndex, eventInputOpen } = useSimulation()
+  const { projectName, healthScores, isPlaying, currentDay, currentTickIndex, eventInputOpen, reportData, showReport } = useSimulation()
   const dispatch = useSimulationDispatch()
   const [eventText, setEventText] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -150,6 +150,18 @@ export default function TopBar() {
           </button>
         )}
 
+        {/* Re-open completed simulation report */}
+        {reportData && !showReport && (
+          <button
+            onClick={() => dispatch({ type: 'SHOW_REPORT', report: reportData })}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-900/30 hover:bg-blue-800/40 border border-blue-500/40 text-sm transition-colors"
+            title="Open simulation results"
+          >
+            <span className="text-blue-300 text-xs">&#128202;</span>
+            <span className="text-blue-200 text-xs">View Results</span>
+          </button>
+        )}
+
         {/* Play/Pause */}
         <button
           onClick={() => dispatch({ type: 'SET_PLAYING', isPlaying: !isPlaying })}
@@ -162,8 +174,17 @@ export default function TopBar() {
             </>
           ) : (
             <>
-              <span className="text-green-400">&#9654;</span>
-              <span className="text-gray-300">{currentDay > 0 || currentTickIndex > 0 ? 'Resume' : 'Play'}</span>
+              {currentDay > 0 || currentTickIndex > 0 ? (
+                <>
+                  <span className="text-green-400">&#8635;</span>
+                  <span className="text-gray-300">Rerun</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-green-400">&#9654;</span>
+                  <span className="text-gray-300">Play</span>
+                </>
+              )}
             </>
           )}
         </button>

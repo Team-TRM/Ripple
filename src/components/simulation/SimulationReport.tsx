@@ -87,6 +87,26 @@ export default function SimulationReport() {
     setRerunInput('')
   }
 
+  const canRerunFromReport = displayReport.decisionAnalysis.some(
+    (d) => Boolean(d.decisionPointId && d.prompt && d.options?.length)
+  )
+
+  const handleRerunWithAdjustments = () => {
+    const target = displayReport.decisionAnalysis.find(
+      (d) => Boolean(d.decisionPointId && d.prompt && d.options?.length)
+    )
+    if (!target || !target.decisionPointId || !target.prompt || !target.options?.length) return
+
+    setRerunTarget({
+      day: target.day,
+      prompt: target.prompt,
+      options: target.options,
+      originalChoice: target.originalChoice || target.decision,
+      decisionPointId: target.decisionPointId,
+    })
+    setRerunInput('')
+  }
+
   const handleRerunSubmit = async () => {
     if (!rerunTarget || !rerunInput.trim()) return
     const currentReport = reportData
@@ -362,7 +382,14 @@ export default function SimulationReport() {
 
         {/* Footer */}
         <div className="px-6 py-3 border-t border-gray-800 flex-shrink-0 flex justify-between">
-          <div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleRerunWithAdjustments}
+              disabled={!canRerunFromReport}
+              className="px-4 py-2 text-xs bg-blue-600/20 border border-blue-500/40 text-blue-300 hover:bg-blue-600/30 disabled:bg-gray-800 disabled:text-gray-500 disabled:border-gray-700 disabled:cursor-not-allowed rounded-lg transition-colors font-medium"
+            >
+              Rerun with adjustments
+            </button>
             {previousReport && (
               <button
                 onClick={() => setShowingPrevious(!showingPrevious)}

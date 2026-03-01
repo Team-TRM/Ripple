@@ -1,267 +1,370 @@
 # API Reference
 
-All API routes are Next.js Route Handlers under `src/app/api/`.
+All endpoints are Next.js Route Handlers under `src/app/api/`.
 
 ## Project Lifecycle
 
 ### `GET /api/projects`
 
-List all projects.
+Returns all projects, newest first.
 
-**Response:** `Project[]` — array of project objects with basic fields.
-
----
+Includes lightweight relations:
+- `events`: `{ id, dayNumber, dateLabel, title }[]`
+- `ticks`: `{ id, dayNumber, tickIndex, subTickIndex }[]`
 
 ### `POST /api/projects`
 
-Create a new project and generate initial clarifying questions.
+Create project and generate clarifying questions.
 
-**Body:**
+Body:
+
 ```json
 {
-  "context": "A major Australian telecom has suffered a data breach..."
+  "context": "A telecom company suffers a major data breach..."
 }
 ```
 
-**Flow:**
-1. Create project with status `"setup"`
-2. Call `generateQuestions()` [LLM] — generates 1-3 clarifying questions
-3. Set status to `"questions"`
+Behavior:
+- validates context
+- calls `generateQuestions(...)`
+- creates project with `status: "questions"`
+- persists generated questions
 
-**Response:** Full project object with `questions[]`.
-
----
+Response: created project with `questions[]`.
 
 ### `GET /api/projects/[id]`
 
-Fetch full project with all related data.
-
-**Includes:** questions, cohorts, events, ticks (with messages, summaries, healthScore, decisions).
-
-**Response:** Complete project object.
-
----
+Returns full project with:
+- `questions`
+- `cohorts`
+- `events`
+- `ticks` (with `messages` and `summaries`)
 
 ### `DELETE /api/projects/[id]`
 
-Delete a project. Cascades to all related data (ticks, messages, cohorts, etc.).
+Deletes project and cascades related records.
 
----
+Response:
 
-## Simulation Setup
+```json
+{ "success": true }
+```
+
+## Setup Endpoints
 
 ### `POST /api/projects/[id]/answers`
 
-Submit answers to setup questions, triggering setup generation.
+Submit answers to clarifying questions and generate setup.
 
-**Body:**
+Body:
+
 ```json
 {
-  "answers": [
-    { "questionId": "clx...", "answer": "The breach exposed 10M customer records..." }
+  "answers": {
+    "questionId1": "answer text",
+    "questionId2": "answer text"
+  }
+}
+```
+
+Behavior:
+- updates `ProjectQuestion.answer`
+- generates `summary`
+- generates setup (`projectName`, cohorts, events)
+- creates cohorts and timeline events
+- sets status to `ready`
+
+Response: updated project including `cohorts` and `events`.
+
+### `POST /api/projects/[id]/confirm`
+
+Confirm setup and initialize simulation runtime.
+
+Body:
+
+```json
+{
+  "simulationDays": 7,
+  "cohorts": [
+    { "id": "...", "name": "General Public", "description": "..." }
+  ],
+  "events": [
+    { "id": "...", "title": "Initial Incident", "description": "..." }
   ]
 }
 ```
 
-**Flow:**
-1. Store answers on `ProjectQuestion` records
-2. Call `generateSummary()` [LLM] — 2-4 paragraph factual summary
-3. Call `generateSetup()` [LLM] — generates:
-   - **4 cohorts** with attention weights and sensitivity tags
-   - **Timeline events** extracted from user answers (no fabrication)
-4. Create `Cohort` and `TimelineEvent` records
-5. Set status to `"ready"`
+Notes:
+- `simulationDays` is clamped to `[3, 60]`.
+- Endpoint streams progress via SSE.
 
-**Response:** Updated project with cohorts, events, and summary.
+SSE payload shape:
 
----
-
-### `POST /api/projects/[id]/confirm`
-
-Confirm setup and start the simulation. Uses Server-Sent Events (SSE) for progress streaming.
-
-**Flow:**
-1. Generate Tick 0 (Day 0, Morning) via `generateTick()` [LLM]
-2. Generate influence graph via `generateGraph()` [LLM]
-3. Generate speaker profiles via `generateSpeakerProfiles()` [LLM] — 15-25 named individuals
-4. Initialize population stats via `initializePopulationStats()`
-5. Set status to `"running"`
-
-**SSE Events:**
-```
-data: {"step": "tick", "message": "Generating initial tick..."}
-data: {"step": "graph", "message": "Building influence graph..."}
-data: {"step": "speakers", "message": "Creating speaker agents..."}
-data: {"step": "done", "project": {...}}
+```json
+{ "step": "Building influence graph...", "status": "running" }
 ```
 
----
+Final event:
 
-## Simulation Execution
+```json
+{ "step": "complete", "status": "done", "project": { "...": "..." } }
+```
+
+## Runtime Endpoints
 
 ### `POST /api/projects/[id]/step`
 
-Advance the simulation by one tick. This is the main simulation endpoint called in a loop during play mode.
+Advance simulation by one tick.
 
-**Body:**
+Body (all optional):
+
 ```json
 {
-  "decision": "optional — chosen option from last decision",
-  "userEvent": "optional — user-injected crisis text",
-  "fromDay": 0,
+  "decision": "optional",
+  "userEvent": "optional",
+  "fromDay": 1,
   "fromTickIndex": 2
 }
 ```
 
-**Flow:**
-1. If `userEvent` provided, persist as `TimelineEvent` with `isUserInjected: true`
-2. Call `runTick()` — generates content, mutates graph, scores health
-3. Return full tick result
+Behavior:
+- validates project is `running`
+- blocks if pending unresolved decision exists (unless `decision` provided)
+- persists user event (if provided)
+- executes `runTick(...)`
 
-**Response:**
+Response:
+
 ```json
 {
-  "dayNumber": 1,
-  "tickIndex": 0,
-  "nodes": [...],
-  "edges": [...],
-  "healthScores": { "overall": 72, "publicSentiment": 68, ... },
+  "tick": { "id": "...", "dayNumber": 2, "tickIndex": 0, "subTickIndex": 2 },
   "messages": [
-    { "id": "...", "type": "news", "author": "Sky News", "content": "...", "reach": 0.8, "sentiment": -0.3 }
+    {
+      "id": "...",
+      "type": "news",
+      "author": "Outlet",
+      "content": "...",
+      "reach": 0.8,
+      "sentiment": -0.4
+    }
   ],
+  "nodes": [],
+  "edges": [],
+  "healthScores": {
+    "overall": 52,
+    "publicSentiment": 41,
+    "mediaHeat": 68,
+    "regulatoryPressure": 55,
+    "internalStability": 47,
+    "fraudRisk": 61,
+    "publicAwareness": 58,
+    "overallMin": 49,
+    "overallMax": 56
+  },
   "decisionPrompt": {
-    "prompt": "A ransom demand has been received...",
-    "options": ["Pay the ransom", "Refuse and go public", "Negotiate privately"]
+    "prompt": "...",
+    "options": ["...", "..."]
   },
   "executiveRecommendations": [
-    { "role": "CTO", "name": "Sarah Chen", "recommendation": "...", "riskLevel": "high" }
+    {
+      "role": "CTO",
+      "name": "Sarah Chen",
+      "recommendation": "...",
+      "reasoning": "..."
+    }
   ],
-  "populationStats": [...]
+  "agentActions": [
+    {
+      "id": "...",
+      "agentNodeId": "...",
+      "agentLabel": "Media Ecosystem",
+      "tool": "amplify_signal",
+      "goal": "...",
+      "impact": "..."
+    }
+  ],
+  "populationStats": [],
+  "injectedEvent": {
+    "id": "...",
+    "dayNumber": 2,
+    "title": "Crisis Injection",
+    "description": "..."
+  }
 }
 ```
-
----
 
 ### `POST /api/projects/[id]/decide`
 
-Submit a CEO decision choice.
+Submit choice for the currently pending decision.
 
-**Body:**
+Body:
+
 ```json
 {
-  "decisionPointId": "clx...",
-  "choice": "Refuse and go public"
+  "chosenOption": "Issue transparent public statement",
+  "userEvent": "optional"
 }
 ```
 
-**Flow:**
-1. Update `DecisionPoint.chosenOption` with the chosen option
-2. Return success
+Behavior:
+- finds pending decision (`chosenOption == null`)
+- sets `chosenOption` and optional `userEvent`
 
-**Response:** `{ success: true }`
-
----
+Response: updated `DecisionPoint` record.
 
 ### `GET /api/projects/[id]/graph`
 
-Fetch current graph state for initial dashboard load.
+Returns current graph and latest stored health scores.
 
-**Response:**
+Response:
+
 ```json
 {
-  "nodes": [...],
-  "edges": [...],
-  "healthScores": { "overall": 72, ... }
+  "nodes": [],
+  "edges": [],
+  "healthScores": {
+    "overall": 61,
+    "publicSentiment": 55,
+    "mediaHeat": 49,
+    "regulatoryPressure": 36,
+    "internalStability": 67,
+    "fraudRisk": 31,
+    "publicAwareness": 43
+  }
 }
 ```
 
----
-
-## Analysis
+## Analysis and Branching
 
 ### `POST /api/projects/[id]/report`
 
-Generate post-simulation analysis report.
+Generates simulation post-mortem report.
 
-**Flow:**
-1. Load all decisions, health scores (first + last), notable messages
-2. Call `generateSimulationReport()` [LLM] — comprehensive analysis
-3. Enrich with decision metadata (IDs, prompts, options) for rerun UI
+Response shape:
 
-**Response:**
 ```json
 {
   "grade": "C",
-  "headline": "Crisis Mismanagement Led to Significant Reputation Damage",
+  "headline": "...",
   "summary": "...",
-  "healthDashboard": {
-    "overall": { "start": 75, "end": 42, "delta": -33 },
-    "publicSentiment": { "start": 70, "end": 35, "delta": -35 },
-    ...
-  },
   "keyMoments": [
-    { "day": 3, "title": "Ransom Payment Leaked", "impact": "critical", "description": "..." }
+    {
+      "day": 3,
+      "title": "...",
+      "description": "...",
+      "impact": "negative",
+      "healthImpact": -6
+    }
   ],
   "decisionAnalysis": [
     {
-      "day": 2, "decision": "Pay the ransom", "effectiveness": "poor",
+      "day": 2,
+      "decision": "...",
+      "effectiveness": "poor",
       "explanation": "...",
-      "decisionPointId": "clx...", "prompt": "...", "options": [...], "originalChoice": "Pay the ransom"
+      "decisionPointId": "...",
+      "prompt": "...",
+      "options": ["..."],
+      "originalChoice": "..."
     }
   ],
-  "whatWentWell": ["...", "..."],
-  "whatWentWrong": ["...", "..."],
-  "rootCauseAnalysis": "...",
+  "whatWentWell": ["..."],
+  "whatWentWrong": ["..."],
   "recommendations": [
-    { "priority": "critical", "title": "...", "description": "..." }
-  ]
+    { "title": "...", "description": "...", "priority": "critical" }
+  ],
+  "rootCauseAnalysis": "..."
 }
 ```
-
----
 
 ### `POST /api/projects/[id]/rerun`
 
-Branch the simulation from a decision point with a different choice.
+Branch simulation from a decision point.
 
-**Body:**
+Body:
+
 ```json
 {
-  "decisionPointId": "clx...",
-  "newChoice": "Refuse and go public",
-  "currentReport": { ... }
+  "decisionPointId": "...",
+  "newChoice": "Alternate decision",
+  "currentReport": { "...": "..." }
 }
 ```
 
-**Flow:**
-1. Look up DecisionPoint → determine `branchDay`
-2. Save `currentReport` as `project.previousReport`, set `project.rerunFromDay`
-3. Delete DecisionPoints for ticks after branch day
-4. Delete all Ticks after branch day (cascades to messages, summaries, health scores)
-5. Delete user-injected TimelineEvents after branch day
-6. Restore graph from `tick.graphSnapshot` at branch point
-7. Create new DecisionPoint with `chosenOption = newChoice`
-8. Reset `project.currentDay = branchDay`, `project.status = 'running'`
+Behavior:
+- stores current report in `project.previousReport`
+- deletes future branch ticks/decisions/events
+- restores graph from snapshot
+- seeds new branch decision choice
+- resets status to `running`
 
-**Response:**
+Response:
+
 ```json
 {
   "branchDay": 3,
-  "nodes": [...],
-  "edges": [...],
-  "healthScores": { "overall": 68, ... }
+  "nodes": [],
+  "edges": [],
+  "healthScores": {
+    "overall": 64,
+    "publicSentiment": 58,
+    "mediaHeat": 43,
+    "regulatoryPressure": 39,
+    "internalStability": 71,
+    "fraudRisk": 29,
+    "publicAwareness": 45
+  }
 }
 ```
 
----
+## External Source Grounding
 
-## LLM Usage by Endpoint
+### `POST /api/projects/[id]/sources/url`
 
-| Endpoint | LLM Calls | Model |
-|----------|-----------|-------|
-| `POST /projects` | 1 (questions) | mistral-large-latest |
-| `POST /answers` | 2 (summary + setup) | mistral-large-latest |
-| `POST /confirm` | 3 (tick + graph + speakers) | mixed (small + large) |
-| `POST /step` | 1-2 (tick + optional advice) | mistral-small-latest |
-| `POST /report` | 1 (analysis) | mistral-large-latest |
-| `POST /rerun` | 0 (deterministic) | — |
+Ingest a URL into project context for grounding simulation behavior.
+
+Body:
+
+```json
+{
+  "url": "https://example.com/news-article"
+}
+```
+
+Behavior:
+- validates URL and blocks local/private hosts
+- fetches and extracts page text
+- uses Mistral to summarize structured crisis-relevant facts
+- appends source block to `project.context`
+
+Response:
+
+```json
+{
+  "source": {
+    "url": "https://example.com/news-article",
+    "title": "...",
+    "summary": "...",
+    "keyFacts": ["..."],
+    "stakeholders": ["..."],
+    "riskSignals": ["..."],
+    "fetchedAt": "...",
+    "extractedChars": 10432
+  },
+  "skipped": false,
+  "sourceCount": 2,
+  "sources": [],
+  "context": "updated project context"
+}
+```
+
+## Model Usage by Endpoint
+
+- `POST /api/projects`: `mistral-large-latest` (question generation)
+- `POST /api/projects/[id]/answers`: `mistral-large-latest` (summary + setup)
+- `POST /api/projects/[id]/confirm`:
+  - `mistral-small-latest` (tick0, graph, speaker profiles)
+- `POST /api/projects/[id]/step`:
+  - `mistral-small-latest` (tick orchestration + per-agent planning + exec advice)
+- `POST /api/projects/[id]/report`: `mistral-small-latest`
+- `POST /api/projects/[id]/sources/url`: `mistral-small-latest`
