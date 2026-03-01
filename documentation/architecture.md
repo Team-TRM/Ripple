@@ -2,7 +2,7 @@
 
 ## High-Level View
 
-Ripple is a full-stack simulation system where LLMs propose narrative and behavioral changes, and a deterministic engine applies bounded state transitions over a stakeholder influence graph.
+Ripple is a full-stack crisis time machine where LLMs propose narrative and behavioral changes, and a deterministic engine applies bounded state transitions over a stakeholder influence graph.
 
 ```text
 UI (Next.js + React)
@@ -43,6 +43,7 @@ Per tick, Ripple runs:
 - three stochastic parallel runs for robustness (then averaged)
 - independent planner calls for top active nodes
 - deterministic tool execution for each selected agent plan
+- swarm projection where each cohort/actor node represents many individual micro-agents
 
 ### 3) Single Read-Modify-Write Graph Mutation
 
@@ -91,6 +92,7 @@ Complete:
 - `SimulationContext` + reducer is the state backbone.
 - Play loop decouples fetch from message drain for a live feed feel.
 - Force graph keeps position stability and smooth activation interpolation.
+- Zoom-level swarm rendering exposes individual micro-agent behavior within each cohort node.
 
 ### API
 

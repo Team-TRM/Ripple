@@ -5,13 +5,20 @@ Ripple uses a layered multi-agent architecture designed for realistic stakeholde
 ## Agent Layers
 
 ```text
-Tick Orchestrator (scenario-level generation)
-  +
-Autonomous Actor Loop (independent top-node planning)
-  +
-Deterministic Tool Executor (bounded effects)
-  +
-Executive Advisory Layer (decision-time recommendations)
+┌─────────────────────────────────────────────────┐
+│                  Orchestrator                   │
+│             tick-orchestrator.ts                │
+│    Coordinates all agent layers per tick        │
+│                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │ Speaker  │  │ Cohort   │  │ Executive    │  │
+│  │ Agents   │  │ Agents   │  │ Agents       │  │
+│  │ (15-25)  │  │ (4+)     │  │ (4)          │  │
+│  └──────────┘  └──────────┘  └──────────────┘  │
+└─────────────────────────────────────────────────┘
+
+                + Swarm Micro-Agent Layer
+                + Deterministic Tool Execution
 ```
 
 ## 1) Tick Orchestrator
@@ -52,6 +59,17 @@ Each tick:
 
 This is the core independent planning path that elevates runtime from a single monolithic prompt to explicit per-actor execution loops.
 
+## 2.1) Swarm Micro-Agent Representation
+
+Each top-level cohort/actor node is represented as a swarm of individual micro-agents with heterogeneous state:
+
+- activity bias
+- sentiment bias
+- influence/display weight
+- local orbit dynamics for spatialized cohort rendering
+
+Runtime updates are computed at node level and then projected into swarm behavior for visual and behavioral realism. This lets Ripple model society-scale reaction patterns while keeping tick-time performance predictable.
+
 ## Planner Contract
 
 Planner output (`AgentPlanSchema`):
@@ -90,6 +108,7 @@ Runtime behavior:
 - 15-25 speaker profiles generated at setup.
 - Tick generation uses speaker personas and recent speaker posts.
 - Message history is persisted and reloaded, enabling continuity in voice and stance.
+- Speaker outputs are calibrated against cohort dynamics so individual narratives stay consistent with broader swarm behavior.
 
 ## 4) Executive Agents
 

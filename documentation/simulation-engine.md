@@ -63,6 +63,7 @@ The simulation engine advances Ripple one tick at a time, combining structured L
 - Apply influence propagation over edges.
 - Apply activation decay.
 - Persist updated graph in one write.
+- Project updated node dynamics into cohort micro-agent swarms for population-level behavior continuity.
 
 ### Phase 5: Health Computation and Blending
 

@@ -1,8 +1,10 @@
-# Ripple - Crisis Simulation Engine
+# Ripple - Crisis Time Machine
 
-Ripple is a multi-agent crisis simulation platform that helps teams test high-stakes decisions before making them in the real world.
+Ripple is a crisis time machine for war-room decision making.
 
-Given a crisis scenario, Ripple builds a structured world model (stakeholders, timeline, influence graph), runs the simulation tick-by-tick, pauses for leadership decisions, and produces a post-mortem with recommended mitigations.
+When a company is in a PR nightmare (for example: a major data breach), leadership teams need to answer one question fast: what happens after the next decision? Ripple simulates that future before it becomes reality.
+
+Given a scenario, Ripple builds a structured world model (stakeholders, timeline, influence graph), runs the simulation tick-by-tick, pauses for leadership decisions, and produces a post-mortem with mitigations and rerun strategies.
 
 ## Why This Is Technically Strong
 
@@ -19,6 +21,10 @@ Given a crisis scenario, Ripple builds a structured world model (stakeholders, t
 - Stochastic robustness:
   - 3 parallel tick generations per step
   - averaged deltas with confidence band (`overallMin`, `overallMax`)
+- Swarm-scale social modeling:
+  - each cohort/actor node represents a population of individual micro-agents
+  - micro-agents carry distinct activation/sentiment weights and roll up to node state
+  - zoomed swarm visualization exposes population-level dynamics in the UI
 - Human-in-the-loop control:
   - end-of-day decision gating
   - event injection during runtime
@@ -35,6 +41,13 @@ Given a crisis scenario, Ripple builds a structured world model (stakeholders, t
 7. End report explains outcomes, turning points, and recommendations.
 8. Rerun from a prior decision branch to compare outcomes.
 
+## Product Narrative
+
+Every company eventually faces a crisis: a breach, failed launch, or government inquiry.  
+What determines the outcome is rarely the first incident, but the next leadership decision under uncertainty.
+
+Ripple gives teams a war-room simulation environment to test those decisions first. It models how public sentiment, media behavior, regulators, investors, employees, and leadership dynamics can interact and cascade across time before the decision is made in the real world.
+
 ## Architecture Snapshot
 
 ```text
@@ -48,6 +61,25 @@ Next.js Frontend (React + App Router)
        - Report Generator
     -> PostgreSQL (Prisma)
     -> Mistral API (large for setup, small for runtime)
+```
+
+## Multi-Agent Topology
+
+```text
+┌─────────────────────────────────────────────────┐
+│                  Orchestrator                   │
+│             tick-orchestrator.ts                │
+│    Coordinates all agent layers per tick        │
+│                                                 │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
+│  │ Speaker  │  │ Cohort   │  │ Executive    │  │
+│  │ Agents   │  │ Agents   │  │ Agents       │  │
+│  │ (15-25)  │  │ (4+)     │  │ (4)          │  │
+│  └──────────┘  └──────────┘  └──────────────┘  │
+│                                                 │
+│  Swarm Layer: each cohort node aggregates many  │
+│  individual micro-agents with distinct states.  │
+└─────────────────────────────────────────────────┘
 ```
 
 ## Stack
@@ -104,11 +136,23 @@ App: `http://localhost:3000`
 
 - Graph-based stakeholder dynamics with influence edges.
 - Autonomous actor tool actions each tick (`publish_message`, `amplify_signal`, etc.).
+- Independent agent planning per active actor each tick.
 - Smooth node growth/shrink driven by activation and timeline progression.
 - Zoomed micro-agent swarm view for selected nodes.
+- Parallel stochastic simulation per tick with averaged outcomes.
 - URL grounding tool that ingests external article context into simulation state.
 - Executive advisory layer for decision prompts.
 - End-of-simulation report and rerun branching.
+
+## Context Enrichment (RAG Grounding)
+
+Ripple supports simulation grounding from internal and external context so world-building is more accurate and decision-relevant:
+
+- connect company data stores (structured operational context)
+- ingest external URLs/news sources (live external signals)
+- attach documents and reports (policy, incident, and operational evidence)
+
+These sources are used as RAG-style context to enrich agent reasoning, stakeholder modeling, and scenario calibration.
 
 ## Documentation
 

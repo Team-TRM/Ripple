@@ -7,7 +7,7 @@ This document describes how Ripple uses Mistral models in production paths.
 Ripple uses two model tiers:
 
 - `mistral-large-latest` for setup quality and schema-rich world building.
-- `mistral-small-latest` for high-frequency runtime generation and tool planning.
+- `mistral-small-latest` (fine-tuned variant in Ripple pipeline) for high-frequency runtime generation and tool planning.
 
 This keeps setup quality high while controlling tick-time latency.
 
@@ -103,6 +103,19 @@ const result = await mistral.chat.complete({
 - tick-specific behavior constraints (morning/afternoon/evening)
 - narrative continuity via recent messages and memory blocks
 - decision-gating rules (evening-only prompts)
+
+## Fine-Tuned Runtime Behavior Model
+
+Ripple uses a fine-tuned Mistral Small runtime behavior model to improve per-agent response realism in crisis contexts.
+
+Training signal composition:
+- social-media style reaction corpora for authentic short-form stakeholder voice
+- synthetic simulation traces for edge cases, policy constraints, and decision sensitivity
+
+Practical impact in Ripple:
+- stronger consistency of swarm member reactions within each cohort
+- better role-faithful outputs for public, media, regulator, employee, investor, and leadership actors
+- improved stability of tool-selection behavior in autonomous planning loops
 
 ## External Source Grounding
 
