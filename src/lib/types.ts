@@ -36,4 +36,7 @@ export type HealthScores = {
   internalStability: number
   fraudRisk: number
   publicAwareness: number
+  // Range from ensemble runs (undefined if only 1 run was done)
+  overallMin?: number
+  overallMax?: number
 }
